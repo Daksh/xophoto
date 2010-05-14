@@ -1,0 +1,8 @@
+[Activity]
+name = Sugar Commander
+service_name = org.laptop.sugar.SugarCommander
+icon = scommander
+exec = sugar-activity sugarcommander.SugarCommander
+show_launcher = yes
+activity_version = 3
+license = GPLv2+
