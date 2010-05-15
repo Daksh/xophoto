@@ -1,6 +1,8 @@
 [Activity]
 name = XoPhoto
-bundle_id = org.laptop.XoPhoto
-activity_version = 1
+service_name = org.laptop.XoPhoto
 icon = XoPhoto
-class = xophotoactivity.XoPhotoActivity
+exec = sugar-activity xophotoactivity.XoPhotoActivity
+show_launcher = yes
+activity_version = 2
+license = GPLv2+

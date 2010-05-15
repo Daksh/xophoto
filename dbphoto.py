@@ -186,7 +186,7 @@ class DbAccess():
         except sqlite.Error, e:
             print 'An sqlite error:',e.args[0]
             print sql+'\n'
-            return None,None
+            return [],str(e)
 
     def dbtry(self,sql):
         """ execute a sql statement return true if no error"""

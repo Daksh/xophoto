@@ -151,11 +151,11 @@ class XoPhotoActivity(activity.Activity):
         try:
             local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             self.metadata['filename'] = local_path
-            self.metadata['mime_type'] = mtype
+            self.metadata['mime_type'] = 'application/binary'
             #dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',f)
             _logger.debug('write_file %s to %s'%(local_path,file_path,))
             shutil.copyfile(local_path,file_path)
-            self.set_file_path(dest)
+            #self.set_file_path(dest)
         except Exception,e:
             _logger.debug('write_file exception %s'%e)
             raise e
@@ -183,7 +183,7 @@ class EditToolbar(gtk.Toolbar):
         self.doimport.show()
         
         self.delete_comment = ToolButton()
-        self.delete_comment.set_stock_id('gtk_stock_delete')
+        self.delete_comment.set_stock_id('gtk-stock-delete')
         self.delete_comment.set_tooltip(_("Remove Picture"))
         self.delete_comment.show()
         self.insert(self.delete_comment,-1)
@@ -195,7 +195,7 @@ class EditToolbar(gtk.Toolbar):
         separator.show()
 
         self.entry = gtk.Entry()        
-        self.entry.set_width_chars(50)
+        self.entry.set_width_chars(45)
         tool_item = gtk.ToolItem()
         tool_item.set_expand(False)
         tool_item.add(self.entry)
@@ -207,6 +207,12 @@ class EditToolbar(gtk.Toolbar):
         self.add_comment.set_tooltip(_("Add Annotation"))
         self.add_comment.show()
         self.insert(self.add_comment,-1)
+
+        separator = gtk.SeparatorToolItem()
+        separator.props.draw = False
+        separator.set_expand(True)
+        self.insert(separator, -1)
+        separator.show()
 
         self.stop = ToolButton('activity-stop', tooltip=_('Stop'))
         self.stop.props.accelerator = '<Ctrl>Q'
@@ -236,7 +242,7 @@ class UseToolbar(gtk.Toolbar):
     def __init__(self):
         gtk.Toolbar.__init__(self)
         self.doexport = ToolButton('view-fullscreen')
-        self.doexport.set_tooltip(_('Export to USB/SD/FileSystem'))
+        self.doexport.set_tooltip(_('Export to USB/SD/DISK'))
         self.doexport.connect('clicked', self.doexport_cb)
         self.insert(self.doexport, -1)
         self.doexport.show()
