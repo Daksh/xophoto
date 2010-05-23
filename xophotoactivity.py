@@ -45,6 +45,8 @@ import shutil
 
 import display
 import photo_toolbar
+from sources import *
+from sinks import *
 
 #Application Globals
 album_column_width = 200
@@ -60,29 +62,35 @@ console_handler.setFormatter(console_formatter)
 
 class XoPhotoActivity(activity.Activity):
     def __init__(self, handle):
-        if handle and handle.object_id != '':
+        if handle and handle.object_id and handle.object_id != '':
+            _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
             make_jobject = False
         else:
             make_jobject = True
+            _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
+        
+            #This is a new invocation, copy the sqlite database to the data directory
+            source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            if handle.object_id == None and source != dest:
+                shutil.copy('./xophoto.sqlite',dest)
+        
         activity.Activity.__init__(self, handle, create_jobject = make_jobject)
-        """
-        #for development purposes, copy the sqlite database to the data directory
-        source = os.path.join(os.getcwd(),'xophoto.sqlite')
-        dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-        if handle.object_id == None and source != dest:
-            shutil.copy('./xophoto.sqlite',dest)
-        """
+
+        #initialize variables
+        self.file_tree = None
+        
         # Build the activity toolbar.
         self.build_toolbar()
-
-        # Create the game instance.
-        self.game = display.Application()
 
         # Build the Pygame canvas.
         self._pygamecanvas = sugargame.canvas.PygameCanvas(self)
         # Note that set_canvas implicitly calls read_file when resuming from the Journal.
         self.set_canvas(self._pygamecanvas)
         
+        # Create the game instance.
+        self.game = display.Application()
+
         # Start the game running.
         self._pygamecanvas.run_pygame(self.game.run)
         
@@ -121,10 +129,33 @@ class XoPhotoActivity(activity.Activity):
         self.set_toolbox(toolbox)
 
     def edit_toolbar_doimport_cb(self, view_toolbar):
-        pass
+        if not self.file_tree:
+            self.file_tree = FileTree(self.game.db)
+        path = self.file_tree.get_path()
+        pygame.display.flip()
+        if path:
+            self.file_tree.copy_tree_to_ds(path)
+            Datastore_SQLite().scan_images()
     
     def use_toolbar_doexport_cb(self,use_toolbar):
-        pass
+        if not self.file_tree:
+            self.file_tree = FileTree(self.game.db)
+        path = self.file_tree.get_path()
+        pygame.display.flip
+        if path:
+            _logger.debug("write selected album to %s"%path)
+            
+            
+            #figure out how to access correct object model:album_name = self.album_rows[self.selected_index]['subcategory']
+            album_object = self.game.albums
+            album_name = album_object.album_rows[album_object.selected_index]['subcategory']
+            sql = "select pict.*, grp.* from picture as pict, groups as grp where grp.category = '%s' and grp.jobject_id = pict.jobject_id"%album
+            rows,cur = album_object.db.dbdo(sql)
+            _logger.debug('album to display: %s. Number of pictures found: %s'%(album,len(rows),))
+            #def __init__(self,rows,db,sources,path):
+            exporter = ExportAlbum(rows,self.game.db,path)
+            exporter.do_export()
+            
     
     def use_toolbar_doupload_cb(self,use_toolbar):
         pass
@@ -133,6 +164,10 @@ class XoPhotoActivity(activity.Activity):
         pass
     
     def read_file(self, file_path):
+        _logger.debug('read_file %s'%file_path)
+        
+        dict = self.get_metadata()
+        _logger.debug('title was %s'%dict.get('title','no title given'))
         sql_file = open(file_path, "rb")
         local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
         f = open(local_path, 'wb')
@@ -141,15 +176,20 @@ class XoPhotoActivity(activity.Activity):
             while sql_file:
                 block = sql_file.read(4096)
                 f.write(block)
+                
         except IOError, e:
             _logger.debug('read sqlite file to local error %s'%e)
+            return
         finally:
             f.close
             sql_file.close()
+        self.game.db.opendb(f)
         
     def write_file(self, file_path):
         try:
+            self.game.db.closedb()
             local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            #local_path = os.path.join(os.environ['SUGAR_BUNDLE_PATH'],'xophoto.sqlite')
             self.metadata['filename'] = local_path
             self.metadata['mime_type'] = 'application/binary'
             #dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',f)
@@ -159,6 +199,11 @@ class XoPhotoActivity(activity.Activity):
         except Exception,e:
             _logger.debug('write_file exception %s'%e)
             raise e
+        
+    def __stop_clicked_cb(self, button):
+        self._activity.close()
+
+
 
 class EditToolbar(gtk.Toolbar):
     __gtype_name__ = 'EditToolbar'
@@ -285,7 +330,7 @@ class UseToolbar(gtk.Toolbar):
         self.stop.show()
 
     def doexport_cb(self, button):
-        self.emit('do-import')
+        self.emit('do-export')
 
     def doupload_cb(self, button):
         self.emit('do-upload')

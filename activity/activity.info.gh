@@ -1,8 +1,7 @@
 [Activity]
-name = Sugar Commander
-service_name = org.laptop.sugar.SugarCommander
-icon = scommander
-exec = sugar-activity sugarcommander.SugarCommander
-show_launcher = yes
-activity_version = 3
-license = GPLv2+
+name = XoPhoto
+bundle_id = org.laptop.XoPhoto
+activity_version = 2
+icon = XoPhoto
+class = xophotoactivity.XoPhotoActivity
+ 

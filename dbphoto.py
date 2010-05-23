@@ -77,6 +77,13 @@ class DbAccess():
             mime_list.append(m[2])
         return mime_list
     
+    def get_mime_type(self,jobject_id):
+        self.cur.execute("select * from picture where jobject_id = '%s'"%jobject_id)
+        rows = self.cur.fetchall()
+        if len(rows) > 0:
+            return rows[0]['mime_type']
+        return None
+    
     def get_album_list(self):
         sql = 'select max duplicate from picture group by album'
         album_list,cur = self.dbdo(sql)
@@ -128,6 +135,23 @@ class DbAccess():
         if len(rows)>0: return True
         return False
 
+    def get_last_album(self):
+        cursor = self.con.cursor()
+        cursor.execute("select * from config where name = 'last_album'")
+        rows = cursor.fetchmany()
+        if len(rows)>0:
+            return (rows[0]['value'],rows[0]['id'],)
+        return None,0
+    
+    def set_last_album(self,album_id):
+        cursor = self.con.cursor()
+        value,id = self.get_last_album()
+        if id > 0:
+            cursor.execute("update config set value = ? where id = ?",(album_id,id))
+        else:
+            cursor.execute("insert into config (name,value) values (?,?)",('last_ablum',album_id))
+        self.con.commit()
+    
     def table_exists(self,table):
         try:
             sql = 'select  * from %s'%table

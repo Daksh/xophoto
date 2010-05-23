@@ -55,7 +55,7 @@ class Datastore_SQLite():
         returns a list of journal object ids that have mime_type equal to one
         of the entries in mimetype table of xophoto database. 
         """
-        rtn = []
+        rtn = 0
         mime_list = self.db.get_mime_list()
         (results,count) = datastore.find({})
         for f in results:
@@ -65,13 +65,29 @@ class Datastore_SQLite():
             if dict["mime_type"] in mime_list:
                 #record the id, file size, file date, in_ds
                 self.db.create_picture_record(f.object_id, f.get_file_path())
-                rtn.append(f.object_id)
+                rtn += 1
             f.destroy()
         self.db.commit()
-        _logger.debug('%s found in journal'%count)
+        _logger.debug('%s entries found in journal. Number of pictures %s'%(count,rtn,))
         return rtn
 
-
+    def check_for_recent_images(self):
+        find_spec = {'mime_type':['image/png','image/jpg','image/tif','image/bmp','image/gif']}
+        (results,count) = datastore.find(find_spec)
+        _logger.debug('directed image datastore found:%s'%count)
+        added = 0
+        for ds in results:
+            #at least for now assume that the newest images are tetured first
+            sql = "select * from picture where jobject_id ='%s'"%ds.object_id
+            rows,cur = self.db.dbdo(sql)
+            if len(rows) == 0:
+                self.db.create_picture_record(ds.object_id, ds.get_file_path())
+                added += 1
+            ds.destroy()
+        _logger.debug('added %s images from datastore to picture'%added)
+        return (count,added,)
+    
+            
     def get_filename_from_jobject_id(self, id):
         try:
             ds_obj = datastore.get(id)
@@ -84,9 +100,9 @@ class Datastore_SQLite():
             return(fn)
         return None
     
-class filetree():
-    def __init__(self,fn):
-        self.db = dbaccess(fn)
+class FileTree():
+    def __init__(self,db):
+        self.db = db
         self.dialog = None
 
     def get_path(self):
@@ -126,12 +142,13 @@ class filetree():
         return fname
 
     def copy_tree_to_ds(self,path):
-        added = 0
-        if os.path.isdir(path):
-            files = os.listdir(path)
-            for f in files:
+        added = 0        
+        for dirpath, dirnames, filenames in os.walk(path):
+            for filename in filenames:
+                abs_path = os.path.join(dirpath, filename)
+                #print abs_path
                 mtype = ''
-                chunks = f.split('.')
+                chunks = abspath.split('.')
                 if len(chunks)>1:
                     ext = chunks[-1]
                     if ext == 'jpg' or ext == 'jpeg':
@@ -141,19 +158,18 @@ class filetree():
                     elif ext == 'png':
                         mtype = 'image/png'
                 if mtype == '': continue        
-                fullname = os.path.join(path,f)
-                info = os.stat(fullname)
+                info = os.stat(abspath)
                 size = info.st_size
-                if self.db.check_in_ds(fullname,size): continue
+                if self.db.check_in_ds(abspath,size): continue
                 ds = datastore.create()
-                ds.metadata['filename'] = fullname
-                ds.metadata['title'] = f
+                ds.metadata['filename'] = abspath
+                ds.metadata['title'] = filename
                 ds.metadata['mime_type'] = mtype
-                dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',f)
-                shutil.copyfile(fullname,dest)
+                dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',filename)
+                shutil.copyfile(abspath,dest)
                 ds.set_file_path(dest)
                 datastore.write(ds,transfer_ownership=True)
-                self.db.update_picture(ds.object_id,fullname)
+                self.db.update_picture(ds.object_id,abspath)
                 ds.destroy()
                 added += 1
             return added
@@ -174,7 +190,7 @@ if __name__ == '__main__':
         exit()
         for i in imagelist:
             print('\n%s'%ds.get_filename_from_jobject_id(i))
-        ft = filetree('xophoto.sqlite')
+        ft = FileTree('xophoto.sqlite')
         #new = ft.fill_ds()
         print('%s datastore records added'%new)
     else:
