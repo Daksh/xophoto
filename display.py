@@ -1,6 +1,16 @@
 #!/usr/bin/env python
 # display.py 
 #
+"""to do list
+reorder thumbnails3
+change album name2
+hover display annotation
+function on build 802--4.5
+proprietary jobject_id for journal thumbnails5
+gtk-idle-add for thumbnail processing6
+pygame scrolling1
+start slide show roughing out4
+"""
 # Copyright (C) 2010  George Hunt
 #
 # This program is free software; you can redistribute it and/or modify
@@ -33,6 +43,7 @@ import hashlib
 import time
 from threading import Timer
 import datetime
+import gobject
 
 #application imports
 from dbphoto import *
@@ -49,6 +60,7 @@ album_selected_color = (210,210,210)
 selected_color = (0,230,0)
 mouse_timer = time.time()
 in_click_delay = False
+in_db_wait = False
 in_drag = False
 screen_h = 0
 screen_w = 0
@@ -121,14 +133,14 @@ class DisplayOne():
             w = row['scaled_x']
             h = row['scaled_y']
             transform_max = max(w,h)            
-            _logger.debug('transform rec max: %s request max: %s'%(transform_max,max_dim,))
+            #_logger.debug('transform rec max: %s request max: %s'%(transform_max,max_dim,))
             if max_dim == transform_max:
                 self.x_thumb = w
                 self.y_thumb = h
                 self.aspect = float(w)/h
                 blob =row['thumb']
                 surf = pygame.image.frombuffer(blob,(w,h),'RGB')
-                _logger.debug('retrieved thumbnail from database')
+                #_logger.debug('retrieved thumbnail from database')
                 return surf
         try:
             ds_obj = datastore.get(id)
@@ -141,6 +153,11 @@ class DisplayOne():
                 self.surf = pygame.image.load(fn)
             except Exception,e:
                 print('scale_image failed to load %s'%fn)
+                return None
+            try:
+                self.db.create_picture_record(ds_obj.object_id,fn)
+            except PhotoException,e:
+                _logger.debug('create_picture_record returned exception %s'%e)
                 return None
             finally:
                 ds_obj.destroy()
@@ -527,7 +544,7 @@ class DisplayAlbums():
             screen.blit(self.album_surface,(0,0))
 
     def refresh_album_rows(self):
-        sql = "select * from groups where category = 'albums'"
+        sql = "select * from groups where category = 'albums' order by id"
         rows,cur = self.db.dbdo(sql)
         self.number_of_albums = len(rows)
         #keep a permanent reference to the list of albums            
@@ -549,19 +566,26 @@ class DisplayAlbums():
         self.paint_albums()
         #now change the thumbnail side of the screen
         try:
-            album_name = self.album_rows[self.selected_index]['subcategory']
-        except:
+            album_name = self.album_rows[int(self.selected_index)]['subcategory']
+        except Exception,e:
             album_name = '20100521T10:42' #the journal
+            _logger.debug('exception fetching thumbnails %s'%e)
         _logger.debug('now display the thumbnails with the album identifier %s'%album_name)
         self.display_thumbnails(album_name)
         
     def add_to_current_album(self,jobject_id,name=None):
         """if no current album create one. if name supplied use it
         if there is a current album,and name but no jobject_id, change name
+        NOTE: Albums are stored in the table - 'groups' as follows:
+           --category = 'albums'
+           --subcategory = <unique string based upon date-time album was created
+           --Album name = Stored in the jobject_id field
+           --seq = modified as the order of the pictures is modified
         """
         if not name: name = _("Unnamed Stack")
         conn = self.db.get_connection()
         cursor = conn.cursor()
+        self.accumulation_target,id = self.db.get_last_album()
         if not self.accumulation_target:
             self.accumulation_target = str(datetime.datetime.today())
             _logger.debug('new album is:%s'%self.accumulation_target)
@@ -599,10 +623,52 @@ class DisplayAlbums():
         """create a 'current' album (if necessary) and name it"""
         self.add_to_current_album('',name)
             
+    def get_current_album_identifier(self):
+        return   self.album_rows[self.selected_index]['subcategory']
+
+    def get_current_album_name(self):
+        return   self.album_rows[self.selected_index]['jobject_id']
+            
     def add_album_at_xy(self,x,y):
         jobject_id = self.disp_many.get_jobject_id_at_xy(x,y)
         if jobject_id:
             self.add_to_current_album(jobject_id)
+            
+    #####################            ALERT ROUTINES   ##################################
+    
+    def alert(self,msg,title=None):
+        alert = NotifyAlert(0)
+        if title != None:
+            alert.props.title=_('There is no Activity file')
+        alert.props.msg = msg
+        alert.connect('response',self.no_file_cb)
+        self.add_alert(alert)
+        return alert
+        
+    def no_file_cb(self,alert,response_id):
+        self.remove_alert(alert)
+
+    from sugar.graphics.alert import ConfirmationAlert
+  
+    def confirmation_alert(self,msg,title=None,confirmation_cb = None):
+        alert = ConfirmationAlert()
+        alert.props.title=title
+        alert.props.msg = msg
+        alert.callback_function = confirmation_cb
+        alert.connect('response', self._alert_response_cb)
+        self.add_alert(alert)
+        return alert
+
+    #### Method: _alert_response_cb, called when an alert object throws a
+                 #response event.
+    def _alert_response_cb(self, alert, response_id):
+        #remove the alert from the screen, since either a response button
+        #was clicked or there was a timeout
+        this_alert = alert  #keep a reference to it
+        self.remove_alert(alert)
+        #Do any work that is specific to the type of button clicked.
+        if response_id is gtk.RESPONSE_OK and this_alert.callback_function != None:
+            this_alert.callback_function (this_alert, response_id)
             
     def toggle(self,x,y):
         """change the number of albums displayed"""
@@ -627,19 +693,11 @@ class DisplayAlbums():
 class Application():
     #how far does a drag need to be not to be ignored?
     drag_threshold = 10
-    def __init__(self):    
-        self.db = DbAccess('xophoto.sqlite')
-        if not self.db.is_open():
-            _logger.debug('failed to open "xophoto.sqlite" database')
-            exit()
-        self.ds_sql = Datastore_SQLite(self.db)
-        ds_count, added = self.ds_sql.check_for_recent_images()
-        #if the picture table is empty, populate it from the journal, and initialize
-        if ds_count < 10: 
-            self.first_run_setup()
-        
-    def first_run_setup(self):
-        
+    db = None
+    def __init__(self, activity):
+        self._activity = activity
+    
+    def first_run_setup(self):        
         #scan the datastore and add new images as required
         #the following call takes too long during startup, just do it during import
         number_of_pictures = self.ds_sql.scan_images()
@@ -655,8 +713,48 @@ class Application():
         global in_click_delay
         global screen_w
         global screen_h
+        global in_db_wait
         
         if True:
+            #moved the database functionality here because of sync problems with journal
+            if not self._activity.DbAccess_object:  #we need to wait for the read-file to finish
+                Timer(25.0, self.end_db_delay, ()).start()
+                in_db_wait = True
+                while not self._activity.DbAccess_object and in_db_wait:
+                    gtk.main_iteration()
+                if not self._activity.DbAccess_object:
+                    _logger.error('db object not open after timeout in Appplication.run')
+                    exit()
+                    
+            self.db = self._activity.DbAccess_object
+            if not self.db.is_open():
+                _logger.debug('failed to open "xophoto.sqlite" database')
+                exit()
+            self.ds_sql = Datastore_SQLite(self.db)
+            try:
+                ds_count, added = self.ds_sql.check_for_recent_images()
+            except PhotoException,e:
+                #This is a corrupted copy the sqlite database, start over
+                self.db.close()
+                source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+                dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+                try:
+                    shutil.copy(source,dest)
+                except Exception,e:
+                    _logger.debug('database template failed to copy error:%s'%e)
+                    exit()
+                try:
+                    self.DbAccess_object = DbAccess(dest)
+                except Exception,e:
+                    _logger.debug('database failed to open in read file. error:%s'%e)
+                    exit()
+                self.db = self.DbAccess_object
+                
+            #if the picture table is empty, populate it from the journal, and initialize
+            if ds_count < 10: 
+                self.first_run_setup()
+                
+        
             running = True
             do_display = True
             screen = pygame.display.get_surface()
@@ -664,29 +762,26 @@ class Application():
             screen_w = info.current_w
             screen_h = info.current_h
             _logger.debug('startup screen sizes w:%s h:%s '%(screen_w,screen_h,))
+            """
             if screen_h < 400:
                 screen_h = 780
                 screen_w = 1200               
                 #there is a startup bug which causes this intermittentl
                 #return
-
+            """
             # Clear Display
             screen.fill((255,255,255)) #255 for white
             pygame.display.flip()  
-            """#fetch the album (array of album records)
-            sql = 'select * from picture'
-            rows,cur = self.db.dbdo(sql)
-            self.dm = DisplayMany(rows,self.db)
-            self.dm.num_per_row(8)
-            self.dm.number_of_rows(6)
-            """
+
             self.albums = DisplayAlbums(self.db)
             self.albums.paint_albums()
-            #self.dm.paint()
-            #self.dm.display_album('journal')
+            
 
             # Flip Display
-            pygame.display.flip()  
+            pygame.display.flip()
+            
+            # start processing any datastore images that don't have thumbnails
+            gobject.idle_add(self.ds_sql.make_one_thumbnail)
 
     
             while running:
@@ -779,14 +874,28 @@ class Application():
     def end_delay(self):
         global in_click_delay
         in_click_delay = False
+    
+    def end_db_delay(self):    
+        global in_db_wait
+        in_db_wait = False
         
+class shim():
+    def __init__(self):
+        self.DbAccess_object = DbAccess('/home/olpc/.sugar/default/org.laptop.PyDebug/data/pydebug/playpen/XoPhoto.activity/xophoto.sqlite')
+    
 
 def main():
     pygame.init()
     pygame.display.set_mode((0, 0), pygame.RESIZABLE)
-    ap = Application()
+    dummy = shim()
+    ap = Application(dummy)
     ap.run()
 
 if __name__ == '__main__':
+    local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+    source = 'xophoto.sqlite'
+    shutil.copy(source,local_path)
+    #DbAccess_object = DbAccess(local_path)
+
     main()
             

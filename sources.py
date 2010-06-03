@@ -36,8 +36,14 @@ _logger = logging.getLogger('xophoto')
 _logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler()
 console_formatter = logging.Formatter('%(name)s %(levelname)s %(funcName)s: %(lineno)d||| %(message)s')
-console_handler.setFormatter(console_formatter)
+#console_handler.setFormatter(console_formatter)
 #_logger.addHandler(console_handler)
+"""
+Notes to myself:
+need a new structure which records the ds object_ids quickly
+then a routine which creates at least n thumbnails, and
+another routine which will create a single thumbnail and store it- called from gtk idle loop
+"""
 
 class Datastore_SQLite():
     """class for interfacing between the Journal and an SQLite database"""
@@ -45,6 +51,8 @@ class Datastore_SQLite():
         """receives an open dbaccess object (defined in dbphoto) """
         #self.db = dbaccess(fn)
         self.db = database_access_object
+        self.datastore_to_process = None
+        self.datastore_process_index = -1
     
     def ok(self):
         if self.db.is_open():return True
@@ -60,8 +68,6 @@ class Datastore_SQLite():
         (results,count) = datastore.find({})
         for f in results:
             dict = f.get_metadata().get_dictionary()
-            if dict["mime_type"].find('jpg')>-1:
-                _logger.debug('found jpg: %s in mime_list %r'%(dict["mime_type"],mime_list,))
             if dict["mime_type"] in mime_list:
                 #record the id, file size, file date, in_ds
                 self.db.create_picture_record(f.object_id, f.get_file_path())
@@ -72,22 +78,44 @@ class Datastore_SQLite():
         return rtn
 
     def check_for_recent_images(self):
+        """scans the journal for pictures that are not in database, records object_id if found"""
         find_spec = {'mime_type':['image/png','image/jpg','image/tif','image/bmp','image/gif']}
         (results,count) = datastore.find(find_spec)
         _logger.debug('directed image datastore found:%s'%count)
         added = 0
+        a_row_found = False
+        cursor = self.db.get_connection().cursor()
         for ds in results:
-            #at least for now assume that the newest images are tetured first
-            sql = "select * from picture where jobject_id ='%s'"%ds.object_id
-            rows,cur = self.db.dbdo(sql)
-            if len(rows) == 0:
-                self.db.create_picture_record(ds.object_id, ds.get_file_path())
-                added += 1
+            #at least for now assume that the newest images are returned first
+            if not a_row_found:
+                cursor.execute('select * from picture where jobject_id = ?',(str(ds.object_id),))
+                rows = cursor.fetchall()
+                if len(rows) == 0:
+                    #may need to add date entered into ds (create date could be confusing)
+                    self.db.put_ds_into_picture(ds.object_id)
+                    added += 1
+                else: #assume that pictures are returned in last in first out order
+                    a_row_found = True
             ds.destroy()
-        _logger.debug('added %s images from datastore to picture'%added)
+        _logger.debug('added %s datastore object ids from datastore to picture'%added)
         return (count,added,)
     
-            
+    def make_one_thumbnail(self):
+        if not self.datastore_to_process:
+            cursor = self.db.get_connection().cursor()
+            cursor.execute('select * from picture where md5_sum = null')
+            self.datastore_to_process = cursor.fetchall()
+            self.datastore_process_index = 0
+        if self.datastore_to_process and self.datastore_process_index > -1:
+            jobject_id = self.datastore_to_process[self.datastore_process_index]['jobject_id']
+            fn =get_filename_from_jobject_id(jobject_id)
+            if fn:
+                self.db.create_picture_record(f.object_id, fn)
+                self.datastore_process_index += 1
+                if self.datastore_process_index > len(self.datastore_to_process):
+                    self.datastore_process_index = -1
+        return True #we want to continue to process in gtk_idle_loop
+        
     def get_filename_from_jobject_id(self, id):
         try:
             ds_obj = datastore.get(id)
@@ -183,10 +211,11 @@ class FileTree():
                     
                 
 if __name__ == '__main__':
-    db = DbAccess('xophoto.sqlite')
+    db = DbAccess('/home/olpc/.sugar/default/org.laptop.XoPhoto/data/xophoto.sqlite')
     if db.is_open():
         ds_sql = Datastore_SQLite(db)
-        imagelist = ds_sql.scan_images()
+        #count = ds_sql.scan_images()
+        count,added = ds_sql.check_for_recent_images()
         exit()
         for i in imagelist:
             print('\n%s'%ds.get_filename_from_jobject_id(i))

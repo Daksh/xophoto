@@ -47,6 +47,10 @@ class ActivityToolbar(gtk.Toolbar):
         """
         #if activity.metadata:
         if True:
+            label = gtk.Label(_('New Album Name:'))
+            label.show()
+            self._add_widget(label)
+
             self.title = gtk.Entry()
             self.title.set_size_request(int(gtk.gdk.screen_width() / 6), -1)
             if activity.metadata:
@@ -58,10 +62,12 @@ class ActivityToolbar(gtk.Toolbar):
             self.add_album = ToolButton('list-add')
             self.add_album.set_tooltip(_("Add Album"))
             self.add_album.show()
+            self.add_album.connect('clicked', self.__add_album_clicked_cb)
             self.insert(self.add_album,-1)
     
             self.delete_album = ToolButton('list-remove')
             self.delete_album.set_tooltip(_("Remove Album"))
+            self.delete_album.connect('clicked', self.__delete_album_clicked_cb)
             self.delete_album.show()
             self.insert(self.delete_album,-1)
 
@@ -84,24 +90,24 @@ class ActivityToolbar(gtk.Toolbar):
 
         self._update_share()
         """
-        self.keep = ToolButton(tooltip=_('Keep'))
-        #client = gconf.client_get_default()
-        #color = XoColor(client.get_string('/desktop/sugar/user/color'))
-        #keep_icon = Icon(icon_name='document-save', xo_color=color)
-        keep_icon = Icon(icon_name='document-save')
-        self.keep.set_icon_widget(keep_icon)
-        keep_icon.show()
-        self.keep.props.accelerator = '<Ctrl>S'
-        self.keep.connect('clicked', self.__keep_clicked_cb)
-        self.insert(self.keep, -1)
-        self.keep.hide()
-        
         separator = gtk.SeparatorToolItem()
         separator.props.draw = False
         separator.set_expand(True)
         self.insert(separator, -1)
         separator.show()
 
+        self.keep = ToolButton(tooltip=_('Keep'))
+        #client = gconf.client_get_default()
+        #color = XoColor(client.get_string('/desktop/sugar/user/color'))
+        #keep_icon = Icon(icon_name='document-save', xo_color=color)
+        keep_icon = Icon(icon_name='document-save')
+        keep_icon.show()
+        self.keep.set_icon_widget(keep_icon)
+        self.keep.props.accelerator = '<Ctrl>S'
+        self.keep.connect('clicked', self.__keep_clicked_cb)
+        self.insert(self.keep, -1)
+        self.keep.show()
+        
         self.stop = ToolButton('activity-stop', tooltip=_('Stop'))
         self.stop.props.accelerator = '<Ctrl>Q'
         self.stop.connect('clicked', self.__stop_clicked_cb)
@@ -124,7 +130,14 @@ class ActivityToolbar(gtk.Toolbar):
             self.share.combo.set_active(0)
 
         self._updating_share = False
-    
+        
+    def __add_album_clicked_cb (self,button):
+        title = self.title.get_text()
+        self._activity.activity_toolbar_add_album_cb(title)
+                
+    def __delete_album_clicked_cb (self,button):
+        self._activity.activity_toolbar_delete_album_cb()
+        
     def __traceback_changed_cb(self, combo):
         model = self.share.combo.get_model()
         it = self.share.combo.get_active_iter()

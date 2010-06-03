@@ -42,61 +42,87 @@ import gobject
 import sugargame.canvas
 import os
 import shutil
+from threading import Timer
 
 import display
 import photo_toolbar
 from sources import *
 from sinks import *
+import dbphoto
 
 #Application Globals
 album_column_width = 200
+#db can be resumed, new instance, or recovering from db error
 
 import logging
 _logger = logging.getLogger('xophoto')
 _logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler()
 console_formatter = logging.Formatter('%(name)s %(levelname)s %(funcName)s: %(lineno)d||| %(message)s')
-console_handler.setFormatter(console_formatter)
+#console_handler.setFormatter(console_formatter)
 #_logger.addHandler(console_handler)
 
 
 class XoPhotoActivity(activity.Activity):
+    DbAccess_object = None
     def __init__(self, handle):
-        if handle and handle.object_id and handle.object_id != '':
-            _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
-            make_jobject = False
-        else:
-            make_jobject = True
-            _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
-        
-            #This is a new invocation, copy the sqlite database to the data directory
-            source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
-            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-            if handle.object_id == None and source != dest:
-                shutil.copy('./xophoto.sqlite',dest)
-        
-        activity.Activity.__init__(self, handle, create_jobject = make_jobject)
-
         #initialize variables
         self.file_tree = None
+        self.use_db_template = False
+        self._activity = self
+        self.interactive_close = False
+        self.timed_out = False
+        self.realized = False
+        self.game = None
         
+        if handle and handle.object_id and handle.object_id != '' and not self.use_db_template:
+            _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
+            self.make_jobject = False
+        else:
+            self.make_jobject = True
+            _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
+        
+        activity.Activity.__init__(self, handle, create_jobject = self.make_jobject)
+
         # Build the activity toolbar.
         self.build_toolbar()
-
+        
+        """
+        #wait for the gtk window to realize
+        self.connect('realize',self.realized_cb)
+        Timer(5.0, self.end_realize_delay, ()).start()
+        
+        while not self.timed_out and not self.realized:
+            gtk.main_iteration()
+        
+        if self.timed_out:
+            _logger.debug('gtk window not realized')
+            exit()
+        """
+        
         # Build the Pygame canvas.
         self._pygamecanvas = sugargame.canvas.PygameCanvas(self)
+
         # Note that set_canvas implicitly calls read_file when resuming from the Journal.
         self.set_canvas(self._pygamecanvas)
         
         # Create the game instance.
-        self.game = display.Application()
+        self.game = display.Application(self)
 
         # Start the game running.
         self._pygamecanvas.run_pygame(self.game.run)
+
+    def end_realize_delay(self):
+        self.timed_out = True
+        
+    def realized_cb(self):
+        self.realized = True
+
         
     def build_toolbar(self):
         toolbox = photo_toolbar.ActivityToolbox(self)
         activity_toolbar = toolbox.get_activity_toolbar()
+        """
         label = gtk.Label(_('New Album Name:'))
         tool_item = gtk.ToolItem()
         tool_item.set_expand(False)
@@ -106,13 +132,16 @@ class XoPhotoActivity(activity.Activity):
         tool_item.show()
 
         activity_toolbar._add_widget(label)
-        activity_toolbar.keep.props.visible = False
+        """
+        activity_toolbar.keep.props.visible = True
         #activity_toolbar.share.props.visible = False
         
         self.edit_toolbar = EditToolbar()
         toolbox.add_toolbar(_('Edit'), self.edit_toolbar)
         self.edit_toolbar.connect('do-import',
                 self.edit_toolbar_doimport_cb)
+        self.edit_toolbar.connect('do-stop',
+                self.__stop_clicked_cb)
         self.edit_toolbar.show()
 
         self.use_toolbar = UseToolbar()
@@ -123,11 +152,56 @@ class XoPhotoActivity(activity.Activity):
                 self.use_toolbar_doupload_cb)
         self.use_toolbar.connect('do-slideshow',
                 self.use_toolbar_doslideshow_cb)
+        self.use_toolbar.connect('do-stop',
+                self.__stop_clicked_cb)
         self.use_toolbar.show()
 
         toolbox.show()
         self.set_toolbox(toolbox)
+    
+ 
+    def activity_toolbar_add_album_cb(self,album_name):
+        self.game.albums.change_name_of_current_album(album_name )
+    
+    def activity_toolbar_delete_album_cb(self):
+        album = self.game.albums.get_current_album_name()
+        self.alert('Are you sure you want to delete %s?'%album)
+        
+    def confirm_delete_album_cb(self,response):
+        album = self.game.albums.get_current_album_identifier()
 
+        if not response in (gtk.RESPONSE_OK):return
+        sql = 'delete from groups where subcategory = ?'
+        cursor = self.game.db.conn.cursor()
+        cursor.execute(sql,())
+    
+    def copy(self):
+        _logger.debug('entered copy which will save and reinit sql database')
+        dict = self.get_metadata()
+        self.save()
+        if dict.get('dbcorrupted','False') == 'False':
+            #try to save all the time/computation involved in making thumbnails
+            pass
+        else:
+            #just copy in the template and save it into the journal
+            source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            shutil.copy(source,dest)
+            try:
+                self.DbAccess_object = dbphoto.DbAccess(dest)
+            except Exception,e:
+                _logger.debug('database template failed to open error:%s'%e)
+                exit()
+            source = dest
+            ds = datastore.create()
+            ds.metadata['title'] = _('Unnamed Pictures')
+            ds.metadata['mime_type'] = 'application/binary'
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance','xophoto.sqlite')
+            shutil.copyfile(source,dest)
+            ds.set_file_path(dest)
+            datastore.write(ds,transfer_ownership=True)
+            ds.destroy()
+        
     def edit_toolbar_doimport_cb(self, view_toolbar):
         if not self.file_tree:
             self.file_tree = FileTree(self.game.db)
@@ -141,17 +215,23 @@ class XoPhotoActivity(activity.Activity):
         if not self.file_tree:
             self.file_tree = FileTree(self.game.db)
         path = self.file_tree.get_path()
+        
+        #think about writing the whole journal, and the trash (would need to add these to the selectable paths)
         pygame.display.flip
         if path:
             _logger.debug("write selected album to %s"%path)
-            
-            
+                        
             #figure out how to access correct object model:album_name = self.album_rows[self.selected_index]['subcategory']
+            #generate a list of dictionary rows which contain the info about images to write
             album_object = self.game.albums
-            album_name = album_object.album_rows[album_object.selected_index]['subcategory']
-            sql = "select pict.*, grp.* from picture as pict, groups as grp where grp.category = '%s' and grp.jobject_id = pict.jobject_id"%album
-            rows,cur = album_object.db.dbdo(sql)
-            _logger.debug('album to display: %s. Number of pictures found: %s'%(album,len(rows),))
+            album_name = album_object.album_rows[int(album_object.selected_index)]['subcategory']
+            sql = """select pict.*, grp.* from picture as pict, groups as grp \
+                  where grp.category = ? and grp.jobject_id = pict.jobject_id"""
+            cursor = album_object.db.con.cursor()
+            cursor.execute(sql,(album_name,))
+            rows = cursor.fetchall()
+            
+            _logger.debug('album to export: %s. Number of pictures found: %s'%(album_name,len(rows),))
             #def __init__(self,rows,db,sources,path):
             exporter = ExportAlbum(rows,self.game.db,path)
             exporter.do_export()
@@ -164,43 +244,76 @@ class XoPhotoActivity(activity.Activity):
         pass
     
     def read_file(self, file_path):
-        _logger.debug('read_file %s'%file_path)
-        
-        dict = self.get_metadata()
-        _logger.debug('title was %s'%dict.get('title','no title given'))
-        sql_file = open(file_path, "rb")
-        local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-        f = open(local_path, 'wb')
-        _logger.debug('reading from %s and writeing to %s'%(file_path,local_path,))
+        _logger.debug('started read_file %s. make_file flag %s'%(file_path,self.make_jobject))
+        if self.make_jobject:  #make jobject is flag signifying that we are not resuming activity
+            _logger.debug(' copied template  rather than resuming')
+            #This is a new invocation, copy the sqlite database to the data directory
+            source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            try:
+                shutil.copy(source,dest)
+            except Exception,e:
+                _logger.debug('database template failed to copy error:%s'%e)
+                exit()
+        else:
+            if self.DbAccess_object:  #if the database is open don't overwrite and confuse it
+                _logger.debug('in read-file, db was already open')
+                return
+            dict = self.get_metadata()
+            _logger.debug('title was %s'%dict.get('title','no title given'))
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            _logger.debug('reading from %s and writeing to %s'%(file_path,dest,))
+            try:
+                shutil.copy(file_path, dest)
+                _logger.debug('completed writing the sqlite file')
+                    
+            except Exception, e:
+                _logger.debug('read sqlite file to local error %s'%e)
+                return
         try:
-            while sql_file:
-                block = sql_file.read(4096)
-                f.write(block)
+            self.DbAccess_object = DbAccess(dest)
+        except Exception,e:
+            _logger.debug('database failed to open in read file. error:%s'%e)
+            exit()
+        _logger.debug('completed read_file. DbAccess_jobject is created')
                 
-        except IOError, e:
-            _logger.debug('read sqlite file to local error %s'%e)
-            return
-        finally:
-            f.close
-            sql_file.close()
-        self.game.db.opendb(f)
         
     def write_file(self, file_path):
+        
         try:
-            self.game.db.closedb()
+            if self.DbAccess_object:
+                if self.DbAccess_object.get_error(): return  #dont save a corrupted database
+                self.DbAccess_object.closedb()
+            if self.game and self.game.db:    
+                self.game.db = None
+            self.DbAccess_object = None
             local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             #local_path = os.path.join(os.environ['SUGAR_BUNDLE_PATH'],'xophoto.sqlite')
             self.metadata['filename'] = local_path
             self.metadata['mime_type'] = 'application/binary'
-            #dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',f)
             _logger.debug('write_file %s to %s'%(local_path,file_path,))
             shutil.copyfile(local_path,file_path)
-            #self.set_file_path(dest)
         except Exception,e:
             _logger.debug('write_file exception %s'%e)
             raise e
+        if self.interactive_close:
+            try: #putting in an empty template makes it easier to make a distributable activity
+                source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+                shutil.copy(source,local_path)
+            except Exception,e:
+                _logger.debug('database template failed to copy error:%s'%e)
+                exit()
+        else:
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+            try:
+                self.DbAccess_object = DbAccess(dest)
+            except Exception,e:
+                _logger.debug('database failed to re-open in write file. error:%s'%e)
+                exit()
+            _logger.debug('sqlite datbase re-opened successfully')
         
     def __stop_clicked_cb(self, button):
+        self.interactive_close = True
         self._activity.close()
 
 
@@ -213,6 +326,9 @@ class EditToolbar(gtk.Toolbar):
                               gobject.TYPE_NONE,
                               ([])),
         'do-import': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-stop': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([]))
     }
@@ -261,13 +377,15 @@ class EditToolbar(gtk.Toolbar):
 
         self.stop = ToolButton('activity-stop', tooltip=_('Stop'))
         self.stop.props.accelerator = '<Ctrl>Q'
-        #self.stop.connect('clicked', self.__stop_clicked_cb)
+        self.stop.connect('clicked', self.dostop_cb)
         self.insert(self.stop, -1)
         self.stop.show()
 
-
     def doimport_cb(self, button):
         self.emit('do-import')
+
+    def dostop_cb(self, button):
+        self.emit('do-stop')
 
 class UseToolbar(gtk.Toolbar):
     __gtype_name__ = 'UseToolbar'
@@ -280,6 +398,9 @@ class UseToolbar(gtk.Toolbar):
                           gobject.TYPE_NONE,
                           ([])),
         'do-slideshow': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-stop': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([]))
     }
@@ -325,7 +446,7 @@ class UseToolbar(gtk.Toolbar):
 
         self.stop = ToolButton('activity-stop', tooltip=_('Stop'))
         self.stop.props.accelerator = '<Ctrl>Q'
-        #self.stop.connect('clicked', self.__stop_clicked_cb)
+        self.stop.connect('clicked', self.dostop_cb)
         self.insert(self.stop, -1)
         self.stop.show()
 
@@ -337,4 +458,8 @@ class UseToolbar(gtk.Toolbar):
 
     def doslideshow_cb(self, button):
         self.emit('do-slideshow')
+
+    def dostop_cb(self, button):
+        self.emit('do-stop')
+
 

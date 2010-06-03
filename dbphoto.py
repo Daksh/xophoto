@@ -38,8 +38,8 @@ _logger = logging.getLogger('xophoto')
 _logger.setLevel(logging.DEBUG)
 console_handler = logging.StreamHandler()
 console_formatter = logging.Formatter('%(name)s %(levelname)s %(funcName)s: %(lineno)d||| %(message)s')
-console_handler.setFormatter(console_formatter)
-_logger.addHandler(console_handler)
+#console_handler.setFormatter(console_formatter)
+#_logger.addHandler(console_handler)
 
 
 class DbAccess():
@@ -48,10 +48,13 @@ class DbAccess():
     def __init__(self,fn):
         self.opendb(fn)
         self.added = 0
+        self.error = ''
     
     def opendb(self,dbfilename):
         try:
-            _logger.debug('opening database cwd:%s filename %s'%(os.getcwd(),dbfilename,))
+            if not os.path.isfile(dbfilename):
+                _logger.debug('trying to open database cwd:%s filename %s'%(os.getcwd(),dbfilename,))
+                dbfilename = os.path.join(os.getcwd(),dbfilename)
             self.con = sqlite3.connect(dbfilename)
             self.con.row_factory = sqlite3.Row
             self.con.text_factory = str
@@ -65,6 +68,9 @@ class DbAccess():
     def is_open(self):
         if self.con: return True
         return False
+    
+    def get_error(self):
+        return self.error
 
     def closedb(self):
         if self.con:self.con.close()
@@ -96,6 +102,7 @@ class DbAccess():
         """create a record in picture pointing to unique pictures in the journal.
            Use md5 checksum to test for uniqueness
            For non unique entries, add a copy number (fieldname:duplicate) greater than 0
+           returns number of records added
         """
         _logger.debug('create_picture_record object_id:%s  file: %s'%(object_id,fn,))
         #if object_id == '': return
@@ -113,15 +120,34 @@ class DbAccess():
         rows = self.cur.fetchall()
         #_logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
         #the object_id is supposed to be unique, so add only new object_id's
+        info = os.stat(fn)
         if len(rows) == 0:
-            info = os.stat(fn)
             sql = """insert into picture \
                   (in_ds, mount_point, orig_size, create_date,jobject_id, md5_sum, duplicate) \
                   values (%s,'%s',%s,'%s','%s','%s',%s)""" % \
                   (1, fn, info.st_size, info.st_ctime, object_id, md5_hash,len(rows_md5),)
-            _logger.debug('sql: %s'%sql)
-            self.con.execute(sql)                
-
+            cursor = self.con.cursor()
+            cursor.execute(sql)                
+            self.con.commit()
+            return 1
+        elif len(rows) == 1:
+            sql = """update picture set in_ds = ?, mount_point = ?, orig_size = ?, \
+                  create_date = ?, md5_sum = ?, duplicate = ?"""
+            cursor = self.con.cursor()
+            cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,len(rows_md5)))             
+            self.con.commit()            
+        return 0
+    
+    def put_ds_into_picture(self,jobject_id):
+        self.cur.execute("select * from picture where jobject_id = ?",(jobject_id,))
+        rows = self.cur.fetchall()
+        #_logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
+        #the object_id is supposed to be unique, so add only new object_id's
+        if len(rows) == 0:
+            cursor = self.con.cursor()
+            cursor.execute('insert into picture (jobject_id) values (?)',(str(jobject_id),))              
+            self.con.commit()
+    
     def clear_in_ds(self):
         self.con.execute('update picture set in_ds = 0')
     
@@ -139,8 +165,11 @@ class DbAccess():
         cursor = self.con.cursor()
         cursor.execute("select * from config where name = 'last_album'")
         rows = cursor.fetchmany()
-        if len(rows)>0:
+        if len(rows) == 1:
             return (rows[0]['value'],rows[0]['id'],)
+        elif len(rows) > 1:
+            _logger.debug('somehow got more than one last_album record')
+            #cursor.execute("delete from config where name = 'last_album'")
         return None,0
     
     def set_last_album(self,album_id):
@@ -207,10 +236,10 @@ class DbAccess():
             cur.execute(sql)
             return cur.fetchall(), cur
             #self.con.commit()
-        except sqlite.Error, e:
-            print 'An sqlite error:',e.args[0]
-            print sql+'\n'
-            return [],str(e)
+        except sqlite.Error, e:            
+            _logger.debug( 'An sqlite error:%s; sql:%s'%(e,sql,))
+            self.error = str(e)
+            raise PhotoException(self.error)
 
     def dbtry(self,sql):
         """ execute a sql statement return true if no error"""

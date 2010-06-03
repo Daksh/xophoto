@@ -43,7 +43,7 @@ class PygameCanvas(gtk.EventBox):
         # Initialize the Pygame window.
         r = self.get_allocation()
         pygame.display.set_mode((r.width, r.height), pygame.RESIZABLE)
-
+        
         # Hook certain Pygame functions with GTK equivalents.
         translator = event.Translator(self._mainwindow, self)
         translator.hook_pygame()
