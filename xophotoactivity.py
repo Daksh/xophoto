@@ -80,6 +80,7 @@ class XoPhotoActivity(activity.Activity):
             self.make_jobject = False
         else:
             self.make_jobject = True
+            self.read_file(None)
             _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
         
         activity.Activity.__init__(self, handle, create_jobject = self.make_jobject)

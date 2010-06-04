@@ -101,6 +101,7 @@ class Datastore_SQLite():
         return (count,added,)
     
     def make_one_thumbnail(self):
+        if not self.db.is_open(): return
         if not self.datastore_to_process:
             cursor = self.db.get_connection().cursor()
             cursor.execute('select * from picture where md5_sum = null')

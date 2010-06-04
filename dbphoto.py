@@ -74,6 +74,7 @@ class DbAccess():
 
     def closedb(self):
         if self.con:self.con.close()
+        self.con = None
         
     def get_mime_list(self):
         mime_list =[]
