@@ -44,12 +44,26 @@ class Translator(object):
         self._inner_evb = inner_evb
 
         # Enable events
+        """
         self._mainwindow.set_events(
             gtk.gdk.KEY_PRESS_MASK | \
             gtk.gdk.KEY_RELEASE_MASK \
         )
-        
+        """
+        self._mainwindow.add_events(
+            gtk.gdk.KEY_PRESS_MASK | \
+            gtk.gdk.KEY_RELEASE_MASK \
+        )
+        """
         self._inner_evb.set_events(
+            gtk.gdk.POINTER_MOTION_MASK | \
+            gtk.gdk.POINTER_MOTION_HINT_MASK | \
+            gtk.gdk.BUTTON_MOTION_MASK | \
+            gtk.gdk.BUTTON_PRESS_MASK | \
+            gtk.gdk.BUTTON_RELEASE_MASK 
+        )
+        """
+        self._inner_evb.add_events(
             gtk.gdk.POINTER_MOTION_MASK | \
             gtk.gdk.POINTER_MOTION_HINT_MASK | \
             gtk.gdk.BUTTON_MOTION_MASK | \

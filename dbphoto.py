@@ -166,11 +166,13 @@ class DbAccess():
         cursor = self.con.cursor()
         cursor.execute("select * from config where name = 'last_album'")
         rows = cursor.fetchmany()
+        _logger.debug('found %s last albums'%len(rows))
         if len(rows) == 1:
             return (rows[0]['value'],rows[0]['id'],)
         elif len(rows) > 1:
             _logger.debug('somehow got more than one last_album record')
-            #cursor.execute("delete from config where name = 'last_album'")
+            cursor.execute("delete from config where name = 'last_album'")
+            self.con.commit()
         return None,0
     
     def set_last_album(self,album_id):
@@ -179,7 +181,7 @@ class DbAccess():
         if id > 0:
             cursor.execute("update config set value = ? where id = ?",(album_id,id))
         else:
-            cursor.execute("insert into config (name,value) values (?,?)",('last_ablum',album_id))
+            cursor.execute("insert into config (name,value) values (?,?)",('last_album',album_id))
         self.con.commit()
     
     def table_exists(self,table):

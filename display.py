@@ -33,6 +33,7 @@ import pygame
 from pygame.locals import *
 
 from sugar.datastore import datastore
+from sugar.graphics.alert import *
 import sys, os
 import gtk
 import shutil
@@ -48,6 +49,7 @@ import gobject
 #application imports
 from dbphoto import *
 from sources import *
+from ezscroll import  ScrollBar
 
 
 #pick up activity globals
@@ -64,6 +66,9 @@ in_db_wait = False
 in_drag = False
 screen_h = 0
 screen_w = 0
+#thickness of scroll bar
+thick = 20
+sb_padding = 6
 album_display_start = 0
 album_column_width = 200
 
@@ -396,7 +401,7 @@ class DisplayAlbums():
        
     predefined_albums = [('20100521T10:42',_('Journal')),('20100521T11:40',_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
     journal_name = _('Journal')
-    def __init__(self,db):
+    def __init__(self,db,activity):
         global album_column_width
         global background_color
         global album_background_color
@@ -404,6 +409,7 @@ class DisplayAlbums():
         self.album_rows = None
         self.album_column_width = album_column_width
         self.db = db  #pointer to the open database
+        self._activity = activity #pointer to the top level activity
         self.accumulation_target,id = self.db.get_last_album()
         self.disp_many = DisplayMany(self.db)
         self.num_of_last_rolls = 5
@@ -420,7 +426,7 @@ class DisplayAlbums():
             return        
         self.max_albums_displayed = screen_h // self.album_height
         #prepare a surface to clear the albums
-        self.album_surface = pygame.Surface((album_column_width,screen_h))
+        self.album_surface = pygame.Surface((album_column_width,screen_h)).convert()
         self.album_surface.fill(background_color)
         
         #if the albums table is empty, populate it from the journal, and initialize
@@ -503,7 +509,7 @@ class DisplayAlbums():
         
         fn = os.path.join('startup_images','stack_background.png')
         stack = pygame.image.load(fn)
-        frame = pygame.transform.scale(stack,(190,164))
+        frame = pygame.transform.scale(stack,(180,155))
         surf.blit(frame,(0,0))
         font = pygame.font.Font(None,self.album_font_size)
         text = font.render(album,0,self.text_color)
@@ -512,8 +518,40 @@ class DisplayAlbums():
         surf.blit(text,text_rect)
         _logger.debug('one album %s'%album)
         return surf
+
+
+    def album_panel(self,world):
+        global album_column_width
+        global screen_h
+        global background_color
+        global album_background_color
+        global album_selected_color
+        global thick
+        global sb_padding
+        thick = 15
+        scrollRect = pygame.Rect(album_column_width - thick, 0, album_column_width-sb_padding, screen_h)
+        excludes = ((0, 0), (album_column_width-thick,screen_h)) # rect where sb update is a pass
+        group = pygame.sprite.RenderPlain()    
+        self.sb = ScrollBar(
+            group,
+            world.get_height(),
+            scrollRect,
+            self.album_surface,
+            1,
+            excludes,
+            4,
+            False,
+            thick,
+            #(170,220,180),
+            (255,255,255),
+            (200,210,225),
+            (240,240,250),
+            (0,55,100))    
+        self.sb.draw(self.album_surface)
+        self.album_surface.blit(world, (0,0),(self.sb.get_scrolled(),(album_column_width-thick,screen_h)))  
+        return self.album_surface    
     
-    def paint_albums(self, start=0):
+    def paint_albums(self):
         global album_display_start
         global album_column_width
         screen_row = 0
@@ -521,27 +559,17 @@ class DisplayAlbums():
             self.refresh_album_rows()            
         if len(self.album_rows) > 0:
             self.clear_albums()
-            if start > 0:
-                album_display_start = start
+            self.world = pygame.Surface((album_column_width, 8 * self.album_height)) #len(self.album_rows) * self.album_height))
+            self.world.fill(album_background_color)
+
             #the logic for albums is very similar to the paint many thumbnails above
             num_albums = len(self.album_rows)
-            if num_albums > album_display_start + self.max_albums_displayed:
-                num_albums = num_albums - album_display_start
-            if num_albums > self.max_albums_displayed:
-                num_albums = self.max_albums_displayed - 2
-                #display the up and down arrows at top of album column
-                self.album_surface.blit(self.one_album('UP'),(0,0))
-                self.album_surface.blit(self.one_album('DOWN'),(0,(self.max_albums_displayed-1)*self.album_height))
-                screen_row = 1
-            #check for upper bound on rows
-            if num_albums + album_display_start > len(self.album_rows):
-                num_albums = len(self.album_rows)-album_display_start
-            _logger.debug('paint_albums in range %s,%s'%(album_display_start, num_albums + album_display_start,))
-            for row_index in range(album_display_start, num_albums + album_display_start):
+            for row_index in range(num_albums ):
                 selected = (row_index == self.selected_index)
-                self.album_surface.blit(self.one_album(self.album_rows[row_index]['jobject_id'],selected),(0,screen_row * self.album_height))
+                self.world.blit(self.one_album(self.album_rows[row_index]['jobject_id'],selected),(0,screen_row * self.album_height))
                 screen_row += 1
-            screen.blit(self.album_surface,(0,0))
+            surf = self.album_panel(self.world)
+            screen.blit(surf, (0,0))           
 
     def refresh_album_rows(self):
         sql = "select * from groups where category = 'albums' order by id"
@@ -586,12 +614,14 @@ class DisplayAlbums():
         conn = self.db.get_connection()
         cursor = conn.cursor()
         self.accumulation_target,id = self.db.get_last_album()
+        _logger.debug('album id was %s and id was %s'%(self.accumulation_target,id))
         if not self.accumulation_target:
             self.accumulation_target = str(datetime.datetime.today())
             _logger.debug('new album is:%s'%self.accumulation_target)
             sql = """insert into groups (category,subcategory,jobject_id,seq) \
                   values ('%s','%s','%s',%s)"""% ('albums',self.accumulation_target,name,0,)
             cursor.execute(sql)
+            conn.commit()
             
             #save off the unique id(timestamp)as a continuing target
             self.db.set_last_album(self.accumulation_target)
@@ -604,6 +634,7 @@ class DisplayAlbums():
                     id = rows[0]['id']
                     sql = "update groups set jobject_id = ? where id = ?"
                     cursor.execute(sql,(name,id,))
+                    conn.commit()
                     return    
         #we will try to add the same picture only once
         sql = "select * from groups where category = ? and jobject_id = ?"
@@ -639,14 +670,14 @@ class DisplayAlbums():
     def alert(self,msg,title=None):
         alert = NotifyAlert(0)
         if title != None:
-            alert.props.title=_('There is no Activity file')
+            alert.props.title = title
         alert.props.msg = msg
         alert.connect('response',self.no_file_cb)
-        self.add_alert(alert)
+        self._activity.add_alert(alert)
         return alert
         
     def no_file_cb(self,alert,response_id):
-        self.remove_alert(alert)
+        self._activity.remove_alert(alert)
 
     from sugar.graphics.alert import ConfirmationAlert
   
@@ -762,26 +793,19 @@ class Application():
             screen_w = info.current_w
             screen_h = info.current_h
             _logger.debug('startup screen sizes w:%s h:%s '%(screen_w,screen_h,))
-            """
-            if screen_h < 400:
-                screen_h = 780
-                screen_w = 1200               
-                #there is a startup bug which causes this intermittentl
-                #return
-            """
+
             # Clear Display
             screen.fill((255,255,255)) #255 for white
             pygame.display.flip()  
 
-            self.albums = DisplayAlbums(self.db)
+            self.albums = DisplayAlbums(self.db, self._activity)
             self.albums.paint_albums()
-            
 
             # Flip Display
             pygame.display.flip()
             
             # start processing any datastore images that don't have thumbnails
-            gobject.idle_add(self.ds_sql.make_one_thumbnail)
+            #gobject.idle_add(self.ds_sql.make_one_thumbnail)
 
     
             while running:
@@ -814,25 +838,35 @@ class Application():
                     #mouse events
                     elif event.type == MOUSEBUTTONDOWN:
                         if self.mouse_timer_running(): #this is a double click
-                            self.process_mouse_double_click(x, y)
+                            self.process_mouse_double_click( event)
                             in_click_delay = False
                         else: #just a single click
-                            self.process_mouse_click(x, y)
+                            self.process_mouse_click(event)
                             pygame.display.flip()
                     elif event.type == MOUSEMOTION:
-                        self.drag(x, y)
+                        self.drag(event)
                     elif event.type == MOUSEBUTTONUP:
                         if in_drag:
-                            self.drop(x, y)
+                            self.drop(event)
                     if event.type == pygame.QUIT:
                         return
                     
                     elif event.type == pygame.VIDEORESIZE:
                         pygame.display.set_mode(event.size, pygame.RESIZABLE)
+
+                    if x < album_column_width:
+                        self.albums.sb.update(event)
+                    changes = self.albums.sb.draw(self.albums.album_surface)
+                    if len(changes) > 0:
+                        changes.append(self.albums.album_surface.blit(self.albums.world, (0,0),
+                              (self.albums.sb.get_scrolled(),(album_column_width-thick,screen_h))))
+                    screen.blit(self.albums.album_surface,(0,0))
+                    pygame.display.update(changes)
                         
                 
-    def drag(self,x,y):
+    def drag(self,event):
         global in_drag
+        x,y = event.pos
         l,m,r = pygame.mouse.get_pressed()
         if not l: return
         if not in_drag:
@@ -841,7 +875,8 @@ class Application():
             #record the initial position
             self.drag_start_x,self.drag_start_y = x,y
     
-    def drop(self,x,y):
+    def drop(self,event):
+        x,y = event.pos
         #if the drag is less than threshold, ignore
         if max(abs(self.drag_start_x - x), abs(self.drag_start_y - y)) < self.drag_threshold:
             in_drag = False
@@ -849,7 +884,8 @@ class Application():
         print('drop at %s,%s'%(x,y,))
         pygame.display.flip()
     
-    def process_mouse_click(self,x,y):
+    def process_mouse_click(self,event):
+        x,y = event.pos
         print('mouse single click')
         if x < album_column_width:
             self.albums.click(x,y)
@@ -857,7 +893,8 @@ class Application():
             self.albums.disp_many.click(x,y)
         pygame.display.flip()
                 
-    def process_mouse_double_click(self,x,y):
+    def process_mouse_double_click(self,event):
+        x,y = event.pos
         print('double click')
         if x > album_column_width:
             self.albums.add_album_at_xy(x,y)
