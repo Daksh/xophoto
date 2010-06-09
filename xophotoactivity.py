@@ -132,20 +132,20 @@ class XoPhotoActivity(activity.Activity):
         
     def build_toolbar(self):
         toolbox = photo_toolbar.ActivityToolbox(self)
-        activity_toolbar = toolbox.get_activity_toolbar()
+        self.activity_toolbar = toolbox.get_activity_toolbar()
         """
         label = gtk.Label(_('New Album Name:'))
         tool_item = gtk.ToolItem()
         tool_item.set_expand(False)
         tool_item.add(label)
         label.show()
-        activity_toolbar.insert(tool_item, 0)
+        self.activity_toolbar.insert(tool_item, 0)
         tool_item.show()
 
-        activity_toolbar._add_widget(label)
+        self.activity_toolbar._add_widget(label)
         """
-        activity_toolbar.keep.props.visible = True
-        #activity_toolbar.share.props.visible = False
+        self.activity_toolbar.keep.props.visible = True
+        #self.activity_toolbar.share.props.visible = False
         
         self.edit_toolbar = EditToolbar()
         toolbox.add_toolbar(_('Edit'), self.edit_toolbar)

@@ -183,7 +183,54 @@ class DbAccess():
         else:
             cursor.execute("insert into config (name,value) values (?,?)",('last_album',album_id))
         self.con.commit()
-    
+        
+    def set_album_count(self,album_id,count):
+        cursor = self.con.cursor()
+        cursor.execute("select * from groups where category = 'albums' and subcategory = ?",(str(album_id),))
+        rows = cursor.fetchmany()
+        if len(rows) == 1:
+            try:
+                cursor.execute('update groups set seq = ? where id = ?',(count,rows[0]['id']))
+                self.con.commit()
+            except Exception,e:
+                _logger.debug('set album count error:%s'%e)
+        
+    def get_album_count(self,album_id):
+        cursor = self.con.cursor()
+        try:
+            cursor.execute("select * from groups where category = 'albums' and subcategory = ?",(str(album_id,)))
+            rows = cursor.fetchmany()
+            if len(rows) == 1:
+                return rows[0]['seq']
+            return 0
+        except:
+            return 0
+        
+    def create_update_album(self,album_id,name):
+        cursor = self.con.cursor()
+        cursor.execute('select * from groups where category = ? and subcategory = ?',\
+                       ('albums',str(album_id,)))
+        rows = cursor.fetchmany()
+        if len(rows)>0  : #pick up the name
+            id = rows[0]['id']
+            cursor.execute("update groups set category = ?, subcategory = ?, jobject_id = ? where id = ?",\
+                           (str(album_id),name,id))
+        else:
+            cursor.execute("insert into groups (category,subcategory,jobject_id,seq) values (?,?,?,?)",\
+                           ('albums',str(album_id),name,0))
+        self.con.commit()
+
+    def add_image_to_album(self, album_id, jobject_id):
+        cursor = self.con.cursor()
+        #we will try to add the same picture only once
+        cursor.execute("select * from groups where category = ? and jobject_id = ?",\
+                       (str(album_id), str(jobject_id,)))
+        rows = cursor.fetchmany()
+        if len(rows)>0: return None
+        cursor.execute("insert into groups (category,subcategory,jobject_id,seq) values (?,?,?,?)",\
+                           (str(album_id),'',str(jobject_id),0))
+        self.con.commit()
+            
     def table_exists(self,table):
         try:
             sql = 'select  * from %s'%table

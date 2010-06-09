@@ -273,7 +273,8 @@ class DisplayMany():
         #check for upper bound on rows
         if num_pict + self.display_start_index > len(self.rows):
             num_pict = len(self.rows)-self.display_start_index
-            self.last_selected.unselect()
+            if self.last_selected:
+                self.last_selected.unselect()
             self.last_selected = None            
             screen.fill((255,255,255))
         _logger.debug('displaymany in range %s,%s'%(self.display_start_index, num_pict + self.display_start_index,))
@@ -295,10 +296,13 @@ class DisplayMany():
         #self.picture_surface = pygame.Surface((self.screen_width,self.screen_height))
         self.pict_dict = {}
         self.picture_surface.fill(background_color)
+        screen.blit(self.picture_surface,(album_column_width,0))
+
         
     def click(self,x,y):
         #first determine if the x,y pair are within the displayed thumbnails
-        thumb_index = int((y // self.xy_size) * self.pict_per_row + (x - album_column_width) // self.xy_size)
+        thumb_index = int((y // self.xy_size) * self.pict_per_row + \
+            (x - album_column_width) // self.xy_size) + self.display_start_index
         if thumb_index <= self.display_end_index:
             self.selected_index = thumb_index
             self.select_pict(self.selected_index)
@@ -353,6 +357,7 @@ class DisplayMany():
     def select_pict(self,num):
         if self.last_selected:
             self.last_selected.unselect()
+        if not self.pict_dict.has_key(num): return
         self.last_selected = self.pict_dict[num].select()
         if self.large_displayed:
             self.one_large()
@@ -398,11 +403,13 @@ class DisplayMany():
         
 class DisplayAlbums():
     """Shows the photo albums on left side of main screen, responds to clicks, drag/drop events"""
-       
-    predefined_albums = [('20100521T10:42',_('Journal')),('20100521T11:40',_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
+    journal_id =  '20100521T10:42'
+    trash_id = '20100521T11:40'
+    predefined_albums = [(journal_id,_('Journal')),(trash_id,_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
     journal_name = _('Journal')
     def __init__(self,db,activity):
         global album_column_width
+        global thick
         global background_color
         global album_background_color
         global album_selected_color
@@ -471,19 +478,21 @@ class DisplayAlbums():
         self.display_journal()
         
     def display_thumbnails(self,album):
-        """uses the album as value for category in table groups to display thumbnails on the right side of screen"""
+        """uses the album (a datetime str) as value for category in table groups
+        to display thumbnails on the right side of screen"""
         sql = """select pict.*, grp.* from picture as pict, groups as grp \
               where grp.category = ? and grp.jobject_id = pict.jobject_id order by create_date desc"""
         cursor = self.conn.cursor()
         cursor.execute(sql,(str(album),))
         rows = cursor.fetchall()
         _logger.debug('album to display: %s. Number of pictures found: %s'%(album,len(rows),))
+        self.db.set_album_count(album,len(rows))
         self.disp_many.clear()
         self.disp_many.last_selected = None
         self.disp_many.paint(rows)
      
     def display_journal(self):   
-        self.display_thumbnails('20100521T10:42')
+        self.display_thumbnails(self.journal_id)
                 
     def clear_albums(self):
         global album_background_color
@@ -499,20 +508,30 @@ class DisplayAlbums():
             return True
         return False
     
-    def one_album(self,album,selected=False):
+    def one_album(self,rows,index,selected=False):
+        """album is title stored in config.jobject_id where category='albums'"""
         surf = pygame.Surface((self.album_column_width,self.album_height))
         
         if selected:
             surf.fill(self.selected_color)
         else:
             surf.fill(self.background_color)
-        
-        fn = os.path.join('startup_images','stack_background.png')
+        album_id = rows[index]['subcategory']
+        count = rows[index]['seq']
+        album = rows[index]['jobject_id']
+
+        if album_id == self.trash_id:
+            if count > 0:
+                fn = os.path.join('startup_images','trash_full.png')
+            else:
+                fn = os.path.join('startup_images','trash_empty.png')
+        else:
+            fn = os.path.join('startup_images','stack_background.png')
         stack = pygame.image.load(fn)
         frame = pygame.transform.scale(stack,(180,155))
         surf.blit(frame,(0,0))
         font = pygame.font.Font(None,self.album_font_size)
-        text = font.render(album,0,self.text_color)
+        text = font.render('%s %s'%(album,count),0,self.text_color)
         text_rect = text.get_rect()
         text_rect.midbottom =  surf.get_rect().midbottom
         surf.blit(text,text_rect)
@@ -566,7 +585,7 @@ class DisplayAlbums():
             num_albums = len(self.album_rows)
             for row_index in range(num_albums ):
                 selected = (row_index == self.selected_index)
-                self.world.blit(self.one_album(self.album_rows[row_index]['jobject_id'],selected),(0,screen_row * self.album_height))
+                self.world.blit(self.one_album(self.album_rows, row_index, selected),(0,screen_row * self.album_height))
                 screen_row += 1
             surf = self.album_panel(self.world)
             screen.blit(surf, (0,0))           
@@ -584,21 +603,15 @@ class DisplayAlbums():
         #get the y index
         y_index = y // self.album_height
         self.selected_index = y_index + album_display_start
-        if self.number_of_albums > self.max_albums_displayed:
-            self.selected_index -= 1
-            if self.selected_index < album_display_start and self.can_go_up():
-                album_display_start -= self.up_down_jump
-            elif y_index == self.max_albums_displayed-1 and self.can_go_down():
-                self.selected_index = album_display_start + self.max_albums_displayed
-                album_display_start += self.up_down_jump        
-        self.paint_albums()
         #now change the thumbnail side of the screen
         try:
             album_name = self.album_rows[int(self.selected_index)]['subcategory']
+            album_title = self.album_rows[int(self.selected_index)]['jobject_id']
         except Exception,e:
-            album_name = '20100521T10:42' #the journal
+            album_name = journal_id #the journal
             _logger.debug('exception fetching thumbnails %s'%e)
         _logger.debug('now display the thumbnails with the album identifier %s'%album_name)
+        self._activity.activity_toolbar.title.set_text(album_title)
         self.display_thumbnails(album_name)
         
     def add_to_current_album(self,jobject_id,name=None):
@@ -607,48 +620,31 @@ class DisplayAlbums():
         NOTE: Albums are stored in the table - 'groups' as follows:
            --category = 'albums'
            --subcategory = <unique string based upon date-time album was created
-           --Album name = Stored in the jobject_id field
+              (This is then used as a value for category to get all pictures in album)
+           --Album name = Stored in the jobject_id field (when category = 'albums')
            --seq = modified as the order of the pictures is modified
+                    (seq = count of albums when category='albums')
         """
-        if not name: name = _("Unnamed Stack")
-        conn = self.db.get_connection()
-        cursor = conn.cursor()
+        if not name: name = _("Unnamed Photos")
         self.accumulation_target,id = self.db.get_last_album()
-        _logger.debug('album id was %s and id was %s'%(self.accumulation_target,id))
+        _logger.debug('last album id was %s and id was %s'%(self.accumulation_target,id))
         if not self.accumulation_target:
             self.accumulation_target = str(datetime.datetime.today())
             _logger.debug('new album is:%s'%self.accumulation_target)
-            sql = """insert into groups (category,subcategory,jobject_id,seq) \
-                  values ('%s','%s','%s',%s)"""% ('albums',self.accumulation_target,name,0,)
-            cursor.execute(sql)
-            conn.commit()
-            
+            self.db.create_update_album(self.accumulation_target,name)
+
             #save off the unique id(timestamp)as a continuing target
             self.db.set_last_album(self.accumulation_target)
+
         else:    #see if this is a request to change name
-            if jobject_id == None:
-                sql = 'select * from groups where category = ? and subcategory = ?'
-                cursor.execute(sql,('albums',self.accumulation_target))
-                rows = cursor.fetchmany()
-                if len(rows)>0  : #pick up the name
-                    id = rows[0]['id']
-                    sql = "update groups set jobject_id = ? where id = ?"
-                    cursor.execute(sql,(name,id,))
-                    conn.commit()
-                    return    
-        #we will try to add the same picture only once
-        sql = "select * from groups where category = ? and jobject_id = ?"
-        cursor.execute(sql,(self.accumulation_target,jobject_id,))
-        rows = cursor.fetchmany()
-        if len(rows)>0: return
+            if jobject_id == '':
+                jobject_id = self.accumulation_target        
+        self.db.add_image_to_album(self.accumulation_target, jobject_id)
             
-        sql = """insert into groups (category,subcategory,jobject_id,seq) \
-              values (?,?,?,?)""" 
-        cursor.execute(sql,(self.accumulation_target,name,jobject_id,0,))
-        self.db.commit()
         #self.display_thumbnails(self.accumulation_target)
         self.refresh_album_rows()
         self.paint_albums()
+        
         
     def change_name_of_current_album(self,name):
         """create a 'current' album (if necessary) and name it"""
@@ -659,12 +655,31 @@ class DisplayAlbums():
 
     def get_current_album_name(self):
         return   self.album_rows[self.selected_index]['jobject_id']
+    
+    def get_album_index_at_xy(self,x,y):
+        if x > album_column_width - thick: return None
+        index = y // self.album_height
+        if index > len(self.album_rows): return None
+        return int(index)
             
-    def add_album_at_xy(self,x,y):
+    def add_to_album_at_xy(self,x,y):
         jobject_id = self.disp_many.get_jobject_id_at_xy(x,y)
         if jobject_id:
             self.add_to_current_album(jobject_id)
             
+    def start_grab(self,x,y):
+        self.start_grab_x = x
+        self.start_grab_y = y
+        #change the cursor some way
+        self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.TOP_LEFT_CORNER))
+            
+    def drop_image(self, img_x,img_y,album_x, album_y):
+        self._activity.window.set_cursor(None)
+        index = self.get_album_index_at_xy(album_x, album_y)
+        jobject_id = self.disp_many.get_jobject_id_at_xy(img_x,img_y)
+        if not index or not jobject_id: return
+        self.db.add_image_to_album(self.album_rows[index]['subcategory'], jobject_id)
+        
     #####################            ALERT ROUTINES   ##################################
     
     def alert(self,msg,title=None):
@@ -727,6 +742,7 @@ class Application():
     db = None
     def __init__(self, activity):
         self._activity = activity
+        self.in_grab = False 
     
     def first_run_setup(self):        
         #scan the datastore and add new images as required
@@ -745,7 +761,7 @@ class Application():
         global screen_w
         global screen_h
         global in_db_wait
-        
+        global in_drag
         if True:
             #moved the database functionality here because of sync problems with journal
             if not self._activity.DbAccess_object:  #we need to wait for the read-file to finish
@@ -868,36 +884,50 @@ class Application():
         global in_drag
         x,y = event.pos
         l,m,r = pygame.mouse.get_pressed()
+        self.last_l = l
+        self.last_r = r
         if not l: return
         if not in_drag:
             print('drag started at %s,%s'%(x,y,))
             in_drag = True
             #record the initial position
             self.drag_start_x,self.drag_start_y = x,y
+        elif x < album_column_width -thick:
+            self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.PLUS))
+            
     
     def drop(self,event):
+        global in_drag
         x,y = event.pos
         #if the drag is less than threshold, ignore
         if max(abs(self.drag_start_x - x), abs(self.drag_start_y - y)) < self.drag_threshold:
             in_drag = False
             return
         print('drop at %s,%s'%(x,y,))
+        if in_drag and self.last_l:
+            self.albums.drop_image(self.drag_start_x,self.drag_start_y,x,y)
         pygame.display.flip()
     
     def process_mouse_click(self,event):
         x,y = event.pos
+        l,m,r = pygame.mouse.get_pressed()
         print('mouse single click')
-        if x < album_column_width:
-            self.albums.click(x,y)
-        else:
-            self.albums.disp_many.click(x,y)
+        if x < album_column_width -thick:
+            scroll_x,scroll_y = self.albums.sb.get_scrolled()
+            self.albums.click(x,y + scroll_y)
+        elif x > album_column_width:
+            if l:
+                self.albums.disp_many.click(x,y)
+            elif r: 
+                self.in_grab = True 
+                self.albums.start_grab(x,y)
         pygame.display.flip()
                 
     def process_mouse_double_click(self,event):
         x,y = event.pos
         print('double click')
         if x > album_column_width:
-            self.albums.add_album_at_xy(x,y)
+            self.albums.add_to_album_at_xy(x,y)
         pygame.display.flip()
                 
     def mouse_timer_running(self):

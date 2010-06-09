@@ -55,8 +55,8 @@ class ActivityToolbar(gtk.Toolbar):
             self.title.set_size_request(int(gtk.gdk.screen_width() / 6), -1)
             if activity.metadata:
                 self.title.set_text(activity.metadata['title'])
-                activity.metadata.connect('updated', self.__jobject_updated_cb)
-            self.title.connect('changed', self.__title_changed_cb)
+                #activity.metadata.connect('updated', self.__jobject_updated_cb)
+            #self.title.connect('changed', self.__title_changed_cb)
             self._add_widget(self.title)
             
             self.add_album = ToolButton('list-add')
