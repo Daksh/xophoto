@@ -174,7 +174,7 @@ class FileTree():
         added = 0        
         for dirpath, dirnames, filenames in os.walk(path):
             for filename in filenames:
-                abs_path = os.path.join(dirpath, filename)
+                abspath = os.path.join(dirpath, filename)
                 #print abs_path
                 mtype = ''
                 chunks = abspath.split('.')
@@ -198,7 +198,7 @@ class FileTree():
                 shutil.copyfile(abspath,dest)
                 ds.set_file_path(dest)
                 datastore.write(ds,transfer_ownership=True)
-                self.db.update_picture(ds.object_id,abspath)
+                self.db.create_picture_record(ds.object_id,abspath)
                 ds.destroy()
                 added += 1
             return added

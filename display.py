@@ -49,7 +49,8 @@ import gobject
 #application imports
 from dbphoto import *
 from sources import *
-from ezscroll import  ScrollBar
+import ezscroll
+from ezscroll.ezscroll import  ScrollBar
 
 
 #pick up activity globals
@@ -413,7 +414,7 @@ class DisplayAlbums():
         global background_color
         global album_background_color
         global album_selected_color
-        self.album_rows = None
+        self.album_rows = []
         self.album_column_width = album_column_width
         self.db = db  #pointer to the open database
         self._activity = activity #pointer to the top level activity
@@ -522,11 +523,11 @@ class DisplayAlbums():
 
         if album_id == self.trash_id:
             if count > 0:
-                fn = os.path.join('startup_images','trash_full.png')
+                fn = os.path.join('assets','trash_full.png')
             else:
-                fn = os.path.join('startup_images','trash_empty.png')
+                fn = os.path.join('assets','trash_empty.png')
         else:
-            fn = os.path.join('startup_images','stack_background.png')
+            fn = os.path.join('assets','stack_background.png')
         stack = pygame.image.load(fn)
         frame = pygame.transform.scale(stack,(180,155))
         surf.blit(frame,(0,0))
@@ -629,13 +630,7 @@ class DisplayAlbums():
         self.accumulation_target,id = self.db.get_last_album()
         _logger.debug('last album id was %s and id was %s'%(self.accumulation_target,id))
         if not self.accumulation_target:
-            self.accumulation_target = str(datetime.datetime.today())
-            _logger.debug('new album is:%s'%self.accumulation_target)
-            self.db.create_update_album(self.accumulation_target,name)
-
-            #save off the unique id(timestamp)as a continuing target
-            self.db.set_last_album(self.accumulation_target)
-
+            self.create_new_album()
         else:    #see if this is a request to change name
             if jobject_id == '':
                 jobject_id = self.accumulation_target        
@@ -645,7 +640,14 @@ class DisplayAlbums():
         self.refresh_album_rows()
         self.paint_albums()
         
-        
+    def create_new_album(self):
+            self.accumulation_target = str(datetime.datetime.today())
+            _logger.debug('new album is:%s'%self.accumulation_target)
+            self.db.create_update_album(self.accumulation_target,name)
+
+            #save off the unique id(timestamp)as a continuing target
+            self.db.set_last_album(self.accumulation_target)
+
     def change_name_of_current_album(self,name):
         """create a 'current' album (if necessary) and name it"""
         self.add_to_current_album('',name)
@@ -678,7 +680,11 @@ class DisplayAlbums():
         index = self.get_album_index_at_xy(album_x, album_y)
         jobject_id = self.disp_many.get_jobject_id_at_xy(img_x,img_y)
         if not index or not jobject_id: return
-        self.db.add_image_to_album(self.album_rows[index]['subcategory'], jobject_id)
+        #if index is larger than max, we want a new album
+        if index > len(self.album_rows):
+            self.create_new_album()
+        else:
+            self.db.add_image_to_album(self.album_rows[index]['subcategory'], jobject_id)
         
     #####################            ALERT ROUTINES   ##################################
     
@@ -742,7 +748,8 @@ class Application():
     db = None
     def __init__(self, activity):
         self._activity = activity
-        self.in_grab = False 
+        self.in_grab = False
+        self.file_tree = None
     
     def first_run_setup(self):        
         #scan the datastore and add new images as required
@@ -750,7 +757,8 @@ class Application():
         number_of_pictures = self.ds_sql.scan_images()
         if number_of_pictures < 10: #put 11 images for learning and demo
             source = os.path.join(os.environ['SUGAR_BUNDLE_PATH'],'startup_images')
-            self.ds_sql.copy_tree_to_ds(source)
+            self.file_tree = FileTree(self.db)
+            self.file_tree.copy_tree_to_ds(source)
             number_of_pictures = self.ds_sql.scan_images()
             if number_of_pictures < 10:
                 _logger.debug('failed to initalize the datastore with at least 10 pictures')
@@ -797,10 +805,6 @@ class Application():
                     exit()
                 self.db = self.DbAccess_object
                 
-            #if the picture table is empty, populate it from the journal, and initialize
-            if ds_count < 10: 
-                self.first_run_setup()
-                
         
             running = True
             do_display = True
@@ -812,8 +816,14 @@ class Application():
 
             # Clear Display
             screen.fill((255,255,255)) #255 for white
-            pygame.display.flip()  
-
+            x = 0
+            pygame.display.flip()
+            
+            #if the picture table is empty, populate it from the journal, and initialize
+            if ds_count < 10:
+                
+                self.first_run_setup()
+                
             self.albums = DisplayAlbums(self.db, self._activity)
             self.albums.paint_albums()
 
