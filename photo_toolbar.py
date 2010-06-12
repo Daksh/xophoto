@@ -47,7 +47,7 @@ class ActivityToolbar(gtk.Toolbar):
         """
         #if activity.metadata:
         if True:
-            label = gtk.Label(_('New Album Name:'))
+            label = gtk.Label(_('New Album Name: '))
             label.show()
             self._add_widget(label)
 
@@ -56,7 +56,8 @@ class ActivityToolbar(gtk.Toolbar):
             if activity.metadata:
                 self.title.set_text(activity.metadata['title'])
                 #activity.metadata.connect('updated', self.__jobject_updated_cb)
-            #self.title.connect('changed', self.__title_changed_cb)
+            self.title.connect('changed', self.__title_changed_cb)
+            self.title.connect('activate', self.__update_title_cb)
             self._add_widget(self.title)
             
             self.add_album = ToolButton('list-add')
@@ -168,18 +169,20 @@ class ActivityToolbar(gtk.Toolbar):
             self._update_title_sid = gobject.timeout_add_seconds(
                                                 1, self.__update_title_cb)
 
-    def __update_title_cb(self):
+    def __update_title_cb(self, entry=None):
         title = self.title.get_text()
 
         self._activity.metadata['title'] = title
         self._activity.metadata['title_set_by_user'] = '1'
-        self._activity.save()
-
+        self._activity.game.change_album_name(title)
+        #self._activity.save()
+        """
         shared_activity = self._activity.get_shared_activity()
         if shared_activity:
             shared_activity.props.name = title
-
+        """
         self._update_title_sid = None
+        
         return False
 
     def _add_widget(self, widget, expand=False):

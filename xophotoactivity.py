@@ -46,6 +46,7 @@ from threading import Timer
 from subprocess import Popen, PIPE
 
 import display
+from display import *
 import photo_toolbar
 from sources import *
 from sinks import *
@@ -76,6 +77,8 @@ class XoPhotoActivity(activity.Activity):
         self.window_realized = False
         self.game = None
         self.kept_once = False
+        self.util = Utilities(self)
+        
        
         if handle and handle.object_id and handle.object_id != '' and not self.use_db_template:
             _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
@@ -172,19 +175,23 @@ class XoPhotoActivity(activity.Activity):
     
  
     def activity_toolbar_add_album_cb(self,album_name):
-        self.game.albums.change_name_of_current_album(album_name )
+        self.game.album_collection.create_new_album(None)
     
     def activity_toolbar_delete_album_cb(self):
-        album = self.game.albums.get_current_album_name()
-        self.game.albums.alert('Are you sure you want to delete %s?'%album)
+        album = self.game.album_collection.get_current_album_name()
+        album_id = self.game.album_collection.get_current_album_identifier()
+        if album_id in [journal_id,trash_id]:
+            self.util.alert(_('Drag pictures to the Trash, and then empty the trash'),\
+                              _('Warning! Journal and Trash cannot be deleted'))
+            return
+        self.util.confirmation_alert(_('Are you sure you want to delete %s?')%album,\
+                                     _('Caution'),self.confirm_delete_album_cb)
         
-    def confirm_delete_album_cb(self,response):
-        album = self.game.albums.get_current_album_identifier()
-
-        if not response in (gtk.RESPONSE_OK):return
-        sql = 'delete from groups where subcategory = ?'
-        cursor = self.game.db.conn.cursor()
-        cursor.execute(sql,())
+    def confirm_delete_album_cb(self,alert,response):
+        album_id = self.game.album_collection.get_current_album_identifier()
+        _logger.debug('about to delete album with identifier:%s'%album_id)
+        if not response == gtk.RESPONSE_OK:return
+        self.game.album_collection.delete_album(album_id)
 
     def command_line(self,cmd, alert_error=False):
         _logger.debug('command_line cmd:%s'%cmd)
@@ -192,7 +199,7 @@ class XoPhotoActivity(activity.Activity):
         output = p1.communicate()
         if p1.returncode != 0 :
             _logger.debug('error returned from shell command: %s was %s'%(cmd,output[0]))
-            if alert_error: self.alert(_('%s Command returned non zero\n'%cmd+output[0]))
+            if alert_error: self.util.alert(_('%s Command returned non zero\n'%cmd+output[0]))
         return output[0],p1.returncode
         
     
@@ -201,6 +208,12 @@ class XoPhotoActivity(activity.Activity):
         dict = self.get_metadata()
         #set a flag to copy the template
         self.interactive_close = True
+        
+        #compact the database
+        conn = self.DbAccess_object.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('vacuum')
+
         self.save()
         
         db_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
@@ -211,33 +224,40 @@ class XoPhotoActivity(activity.Activity):
             exit()
         source = db_path
         ds = datastore.create()
-        ds.metadata['title'] = _('Empty Photo Stack')
+        ds.metadata['title'] = _('New Photo Stack')
         ds.metadata['activity_id'] = dict.get('activity_id')
         ds.metadata['activity'] = 'org.laptop.XoPhoto'
         ds.metadata['mime_type'] = 'application/binary'
         dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance','xophoto.sqlite')
+        
+        #albums are stored in the groups table, so start fresh
+        conn = self.DbAccess_object.get_connection()
+        cursor = conn.cursor()
+        cursor.execute("delete from groups")
+        conn.commit()
+        
         shutil.copyfile(source,dest)
         ds.set_file_path(dest)
         datastore.write(ds,transfer_ownership=True)
         ds.destroy()
-        if dict.get('dbcorrupted','False') == 'False' and not self.kept_once:
-            #try to save all the time/computation involved in making thumbnails
-            backup_db = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto_back.sqlite')
-            if os.path.isfile(backup_db):
-                try:
-                    conn = self.DbAccess_object.get_connection()
-                    cursor = conn.cursor()
-                    cursor.execute("attach '%s' as thumbs"%backup_db)
-                    sql = 'insert into picture select * from thumbs.picture'
-                    cursor.execute(sql)
-                    sql = 'insert into transforms select * from thumbs.transforms'
-                    cursor.execute(sql)
-                    conn.commit()
-                except Exception,e:
-                    _logger.debug('database exception %s'%e)
-                    raise e
-                self.kept_once = True
-                self.game.albums.alert(_('Click KEEP again for a completely new Database.'),_('New Database initialized from the Current Database.'))
+        
+        #check the thumbnails
+        cursor.execute('pragma data_cache.quick_check')
+        rows = cursor.fetchall()
+        if len(rows) == 1 and str(rows[0]) == 'ok':
+            #thumbnails database is ok
+            _logger.debug('thumbnail database passes quick_check')
+        else:
+            #need to start over with a new template and regenerate the thumbnails
+            _logger.debug('swapping in template for transforms (thumbnail) database')
+                
+            try: 
+                source = os.path.join(os.getcwd(),'data_cache.sqlite.template')
+                local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','data_cache.sqlite')
+                shutil.copy(source,local_path)
+            except Exception,e:
+                _logger.debug('data_cache template failed to copy error:%s'%e)
+                exit()
         
     def edit_toolbar_doimport_cb(self, view_toolbar):
         if not self.file_tree:
@@ -284,6 +304,7 @@ class XoPhotoActivity(activity.Activity):
         _logger.debug('started read_file %s. make_file flag %s'%(file_path,self.make_jobject))
         if self.make_jobject:  #make jobject is flag signifying that we are not resuming activity
             _logger.debug(' copied template  rather than resuming')
+            
             #This is a new invocation, copy the sqlite database to the data directory
             source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
@@ -292,6 +313,16 @@ class XoPhotoActivity(activity.Activity):
             except Exception,e:
                 _logger.debug('database template failed to copy error:%s'%e)
                 exit()
+                
+            #now do the same for the thumbnails if they don't already exist        
+            source = os.path.join(os.getcwd(),'data_cache.sqlite.template')
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','data_cache.sqlite')
+            if not os.path.isfile(dest):
+                try:
+                    shutil.copy(source,dest)
+                except Exception,e:
+                    _logger.debug('thumbnail database template failed to copy error:%s'%e)
+                    exit()
         else:
             if self.DbAccess_object:  #if the database is open don't overwrite and confuse it
                 _logger.debug('in read-file, db was already open')

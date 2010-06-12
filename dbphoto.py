@@ -29,6 +29,7 @@ import hashlib
 
 #pick up activity globals
 from xophotoactivity import *
+import display
 
 #define globals related to sqlite
 sqlite_file_path = None
@@ -56,14 +57,33 @@ class DbAccess():
                 _logger.debug('trying to open database cwd:%s filename %s'%(os.getcwd(),dbfilename,))
                 dbfilename = os.path.join(os.getcwd(),dbfilename)
             self.con = sqlite3.connect(dbfilename)
+            self.dbfilename = dbfilename
             self.con.row_factory = sqlite3.Row
             self.con.text_factory = str
             #rows generated thusly will have columns that are  addressable as dict of fieldnames
             self.cur = self.con.cursor()
+            path = os.path.dirname(dbfilename)
+            data_db = os.path.join(path,'data_cache.sqlite')
+            sql = "attach '%s' as data_cache"%data_db
+            _logger.debug('attaching using sql %s'%sql)
+            self.cur.execute(sql)
         except IOError,e:
             _logger.debug('open database failed. exception :%s '%(e,))
             return None
         return self.cur
+    
+    def connection(self):
+        #test to see if the database is open
+        if self.con:
+            try:
+                cursor = self.con.cursor()
+                cursor.execute('select * from config')
+                not_open = False
+            except:
+                not_open = True
+        if not self.con or not_open:
+            self.opendb(self.dbfilename)
+        return self.con
     
     def is_open(self):
         if self.con: return True
@@ -91,13 +111,17 @@ class DbAccess():
             return rows[0]['mime_type']
         return None
     
-    def get_album_list(self):
-        sql = 'select max duplicate from picture group by album'
-        album_list,cur = self.dbdo(sql)
-        if len(album_list) == 0:
-            _logger.debug('failed to retrieve albums')
-            return None
-        return album_list
+    def get_albums(self):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from groups where category = ?',('albums',))
+        return cursor.fetchall()
+    
+    def get_album_thumbnails(self,album_id):
+        sql = """select pict.*, grp.* from picture as pict, groups as grp \
+              where grp.category = ? and grp.jobject_id = pict.jobject_id order by create_date desc"""
+        cursor = self.connection().cursor()
+        cursor.execute(sql,(str(album_id),))
+        return cursor.fetchall()
     
     def create_picture_record(self,object_id, fn):
         """create a record in picture pointing to unique pictures in the journal.
@@ -127,14 +151,14 @@ class DbAccess():
                   (in_ds, mount_point, orig_size, create_date,jobject_id, md5_sum, duplicate) \
                   values (%s,'%s',%s,'%s','%s','%s',%s)""" % \
                   (1, fn, info.st_size, info.st_ctime, object_id, md5_hash,len(rows_md5),)
-            cursor = self.con.cursor()
+            cursor = self.connection().cursor()
             cursor.execute(sql)                
             self.con.commit()
             return 1
         elif len(rows) == 1:
             sql = """update picture set in_ds = ?, mount_point = ?, orig_size = ?, \
                   create_date = ?, md5_sum = ?, duplicate = ?"""
-            cursor = self.con.cursor()
+            cursor = self.connection().cursor()
             cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,len(rows_md5)))             
             self.con.commit()            
         return 0
@@ -145,15 +169,15 @@ class DbAccess():
         #_logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
         #the object_id is supposed to be unique, so add only new object_id's
         if len(rows) == 0:
-            cursor = self.con.cursor()
+            cursor = self.connection().cursor()
             cursor.execute('insert into picture (jobject_id) values (?)',(str(jobject_id),))              
             self.con.commit()
     
     def clear_in_ds(self):
-        self.con.execute('update picture set in_ds = 0')
+        self.connection().execute('update picture set in_ds = 0')
     
     def delete_not_in_ds(self):
-        self.con.execute('delete from picture where in_ds = 0')
+        self.connection().execute('delete from picture where in_ds = 0')
 
     def check_in_ds(self,fullpath,size):
         sql = "select * from picture where mount_point = '%s' and orig_size = %s"%(fullpath,size,)
@@ -163,7 +187,7 @@ class DbAccess():
         return False
 
     def get_last_album(self):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
         cursor.execute("select * from config where name = 'last_album'")
         rows = cursor.fetchmany()
         _logger.debug('found %s last albums'%len(rows))
@@ -176,7 +200,7 @@ class DbAccess():
         return None,0
     
     def set_last_album(self,album_id):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
         value,id = self.get_last_album()
         if id > 0:
             cursor.execute("update config set value = ? where id = ?",(album_id,id))
@@ -185,7 +209,7 @@ class DbAccess():
         self.con.commit()
         
     def set_album_count(self,album_id,count):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
         cursor.execute("select * from groups where category = 'albums' and subcategory = ?",(str(album_id),))
         rows = cursor.fetchmany()
         if len(rows) == 1:
@@ -196,7 +220,7 @@ class DbAccess():
                 _logger.debug('set album count error:%s'%e)
         
     def get_album_count(self,album_id):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
         try:
             cursor.execute("select * from groups where category = 'albums' and subcategory = ?",(str(album_id,)))
             rows = cursor.fetchmany()
@@ -207,13 +231,14 @@ class DbAccess():
             return 0
         
     def create_update_album(self,album_id,name):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
         cursor.execute('select * from groups where category = ? and subcategory = ?',\
                        ('albums',str(album_id,)))
         rows = cursor.fetchmany()
+        _logger.debug('create-update found %s records. album:%s. id:%s'%(len(rows),album_id,name,))
         if len(rows)>0  : #pick up the name
             id = rows[0]['id']
-            cursor.execute("update groups set category = ?, subcategory = ?, jobject_id = ? where id = ?",\
+            cursor.execute("update groups set  subcategory = ?, jobject_id = ? where id = ?",\
                            (str(album_id),name,id))
         else:
             cursor.execute("insert into groups (category,subcategory,jobject_id,seq) values (?,?,?,?)",\
@@ -221,20 +246,27 @@ class DbAccess():
         self.con.commit()
 
     def add_image_to_album(self, album_id, jobject_id):
-        cursor = self.con.cursor()
+        cursor = self.connection().cursor()
+        cursor.execute('select max(seq) as max_seq from groups where category = ? group by category',(album_id,))
+        rows = cursor.fetchall()
+        if len(rows)>0:
+            old_seq = rows[0]['max_seq']
+        else:
+            old_seq = 0
+            _logger.debug('failed to get max of seq for album %s'%album_id)
         #we will try to add the same picture only once
         cursor.execute("select * from groups where category = ? and jobject_id = ?",\
                        (str(album_id), str(jobject_id,)))
         rows = cursor.fetchmany()
         if len(rows)>0: return None
         cursor.execute("insert into groups (category,subcategory,jobject_id,seq) values (?,?,?,?)",\
-                           (str(album_id),'',str(jobject_id),0))
+                           (str(album_id),'',str(jobject_id),old_seq + 20))
         self.con.commit()
             
     def table_exists(self,table):
         try:
             sql = 'select  * from %s'%table
-            self.con.execute(sql)
+            self.connection().execute(sql)
             return True
         except:
             return False
@@ -259,7 +291,7 @@ class DbAccess():
 
     def fieldlist(self,table):
         list=[]     #accumulator for model
-        cur = self.con.cursor()
+        cur = self.connection().cursor()
         cur.execute('select * from %s'%table)
         if cur:
             for field in cur.description:
@@ -282,14 +314,14 @@ class DbAccess():
     def dbdo(self,sql):
         """ execute a sql statement or definition, return rows and cursor """
         try:
-            cur = self.con.cursor()
+            cur = self.connection().cursor()
             cur.execute(sql)
             return cur.fetchall(), cur
             #self.con.commit()
         except sqlite.Error, e:            
             _logger.debug( 'An sqlite error:%s; sql:%s'%(e,sql,))
             self.error = str(e)
-            raise PhotoException(self.error)
+            raise display.PhotoException(self.error)
 
     def dbtry(self,sql):
         """ execute a sql statement return true if no error"""

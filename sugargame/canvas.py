@@ -46,25 +46,14 @@ class PygameCanvas(gtk.EventBox):
         translator.hook_pygame()
 
         # Restore the default cursor.
-        from threading import Timer
-        self.window_timer = False
-        Timer(10.0, self.end_window_delay, ()).start()
-        while not self.window_timer:
-            gtk.main_iteration()
-            if hasattr(self._socket,'get_window'): # or hasattr(self._socket.get_window(),'realized'):
-                break
-        if self.window_timer:
-            _logger.debug('gtk window not visible through socket')
-            exit()
-        self._socket.get_window().set_cursor(None)
-
+        #self._socket.get_window().set_cursor(None)
+        window = self._socket.get_parent_window()
+        window.set_cursor(None)
+        
         # Run the Pygame main loop.
         main_fn()
         return False
 
-    def end_window_delay(self):
-        self.window_timer = True
-        
         
     def get_pygame_widget(self):
         return self._socket

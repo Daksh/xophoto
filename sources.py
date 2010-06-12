@@ -78,24 +78,28 @@ class Datastore_SQLite():
         return rtn
 
     def check_for_recent_images(self):
-        """scans the journal for pictures that are not in database, records object_id if found"""
-        find_spec = {'mime_type':['image/png','image/jpg','image/tif','image/bmp','image/gif']}
-        (results,count) = datastore.find(find_spec)
-        _logger.debug('directed image datastore found:%s'%count)
+        """scans the journal for pictures that are not in database, records object_id if found.
+        stops checking when the first image is found that is already in the database.
+        """
+        mime_list = self.db.get_mime_list()
+        (results,count) = datastore.find({})
+        _logger.debug('Journal/datastore entries found:%s'%count)
         added = 0
         a_row_found = False
         cursor = self.db.get_connection().cursor()
         for ds in results:
             #at least for now assume that the newest images are returned first
             if not a_row_found:
-                cursor.execute('select * from picture where jobject_id = ?',(str(ds.object_id),))
-                rows = cursor.fetchall()
-                if len(rows) == 0:
-                    #may need to add date entered into ds (create date could be confusing)
-                    self.db.put_ds_into_picture(ds.object_id)
-                    added += 1
-                else: #assume that pictures are returned in last in first out order
-                    a_row_found = True
+                dict = ds.get_metadata().get_dictionary()
+                if dict["mime_type"] in mime_list:
+                    cursor.execute('select * from picture where jobject_id = ?',(str(ds.object_id),))
+                    rows = cursor.fetchall()
+                    if len(rows) == 0:
+                        #may need to add date entered into ds (create date could be confusing)
+                        self.db.put_ds_into_picture(ds.object_id)
+                        added += 1
+                    else: #assume that pictures are returned in last in first out order
+                        a_row_found = True
             ds.destroy()
         _logger.debug('added %s datastore object ids from datastore to picture'%added)
         return (count,added,)
