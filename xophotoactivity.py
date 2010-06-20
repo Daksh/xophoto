@@ -44,6 +44,7 @@ import os
 import shutil
 from threading import Timer
 from subprocess import Popen, PIPE
+from help.help import Help
 
 import display
 from display import *
@@ -51,6 +52,12 @@ import photo_toolbar
 from sources import *
 from sinks import *
 import dbphoto
+
+#help interface
+HOME = os.path.join(activity.get_bundle_path(), 'help/XO_Introduction.html')
+#HOME = "http://website.com/something.html"
+HELP_TAB = 3
+
 
 #Application Globals
 album_column_width = 200
@@ -91,24 +98,21 @@ class XoPhotoActivity(activity.Activity):
         activity.Activity.__init__(self, handle, create_jobject = self.make_jobject)
         self.make_jobject = False
 
+        #following are essential for interface to Help
+        self.help_x11 = None
+        self.handle = handle
+        self.help = Help(self)
+
+        self.toolbox = activity.ActivityToolbox(self)
+        self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
+        self.toolbox.show()
+
+        toolbar = gtk.Toolbar()
+        self.toolbox.add_toolbar(_('Help'), toolbar)
+        toolbar.show()
+
         # Build the activity toolbar.
         self.build_toolbar()
-        
-        """
-        #wait for the gtk window to realize
-        self.connect('realize',self.realized_cb)
-        Timer(5.0, self.end_realize_delay, ()).start()
-        
-        while not self.timed_out and not self.realized:
-            gtk.main_iteration()
-        
-        if self.timed_out:
-            _logger.debug('gtk window not realized')
-            exit()
-    def realized_cb(self):
-        self.realized = True
-
-        """
         
         # Build the Pygame canvas.
         self._pygamecanvas = sugargame.canvas.PygameCanvas(self)
@@ -121,21 +125,11 @@ class XoPhotoActivity(activity.Activity):
 
         # Start the game running.
         self._pygamecanvas.run_pygame(self.game.run)
-    """
-    def __realize_cb(self,window):
-        super(activity.Activity,self).__realize_cb()
-        self.window.realized = True
-    """   
-    def is_realized(self):
-        return self.window_realized
-
-    def end_realize_delay(self):
-        self.timed_out = True
-        
         
     def build_toolbar(self):
-        toolbox = photo_toolbar.ActivityToolbox(self)
-        self.activity_toolbar = toolbox.get_activity_toolbar()
+        self.toolbox = photo_toolbar.ActivityToolbox(self)
+        self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
+        self.activity_toolbar = self.toolbox.get_activity_toolbar()
         """
         label = gtk.Label(_('New Album Name:'))
         tool_item = gtk.ToolItem()
@@ -151,7 +145,7 @@ class XoPhotoActivity(activity.Activity):
         #self.activity_toolbar.share.props.visible = False
         
         self.edit_toolbar = EditToolbar()
-        toolbox.add_toolbar(_('Edit'), self.edit_toolbar)
+        self.toolbox.add_toolbar(_('Edit'), self.edit_toolbar)
         self.edit_toolbar.connect('do-import',
                 self.edit_toolbar_doimport_cb)
         self.edit_toolbar.connect('do-stop',
@@ -159,7 +153,7 @@ class XoPhotoActivity(activity.Activity):
         self.edit_toolbar.show()
 
         self.use_toolbar = UseToolbar()
-        toolbox.add_toolbar(_('Use'), self.use_toolbar)
+        self.toolbox.add_toolbar(_('Use'), self.use_toolbar)
         self.use_toolbar.connect('do-export',
                 self.use_toolbar_doexport_cb)
         self.use_toolbar.connect('do-upload',
@@ -170,10 +164,34 @@ class XoPhotoActivity(activity.Activity):
                 self.__stop_clicked_cb)
         self.use_toolbar.show()
 
-        toolbox.show()
-        self.set_toolbox(toolbox)
+        toolbar = gtk.Toolbar()
+        self.toolbox.add_toolbar(_('Help'), toolbar)
+        toolbar.show()
+
+        self.toolbox.show()
+        self.set_toolbox(self.toolbox)
     
- 
+    ################  Help routines
+    def _toolbar_changed_cb(self,widget,tab_no):
+        if tab_no == HELP_TAB:
+            self.help_selected()
+            
+    def set_toolbar(self,tab):
+        self.toolbox.set_current_toolbar(tab)
+
+    def help_selected(self):
+        """
+        if help is not created in a gtk.mainwindow then create it
+        else just switch to that viewport
+        """
+        if not self.help_x11:
+            screen = gtk.gdk.screen_get_default()
+            self.pdb_window = screen.get_root_window()
+            _logger.debug('xid for pydebug:%s'%self.pdb_window.xid)
+            self.help_x11 = self.help.realize_help()
+        else:
+            self.help.activate_help()
+     
     def activity_toolbar_add_album_cb(self,album_name):
         self.game.album_collection.create_new_album(None)
     
@@ -266,7 +284,7 @@ class XoPhotoActivity(activity.Activity):
         pygame.display.flip()
         if path:
             self.file_tree.copy_tree_to_ds(path)
-            Datastore_SQLite().scan_images()
+            Datastore_SQLite(self.game.db).scan_images()
     
     def use_toolbar_doexport_cb(self,use_toolbar):
         if not self.file_tree:

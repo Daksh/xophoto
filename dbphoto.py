@@ -139,11 +139,11 @@ class DbAccess():
         rows_md5 = self.cur.fetchall()
         if len(rows_md5) >0:
             pass
-            #_logger.debug('duplicate picture, ojbect_id %s path: %s'%(object_id,fn,))        
+            _logger.debug('duplicate picture, ojbect_id %s path: %s'%(object_id,fn,))        
         sql = "select * from picture where jobject_id = '%s'"%(object_id,)
         self.cur.execute(sql)
         rows = self.cur.fetchall()
-        #_logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
+        _logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
         #the object_id is supposed to be unique, so add only new object_id's
         info = os.stat(fn)
         if len(rows) == 0:
