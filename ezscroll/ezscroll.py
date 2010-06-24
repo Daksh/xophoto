@@ -4,6 +4,10 @@ import sys
 import pygame
 from pygame import *
 
+import logging
+_logger = logging.getLogger('xophoto.ezscroll')
+_logger.setLevel(logging.DEBUG)
+
 FGCOLOR = 220,220,200
 BGCOLOR = 235,235,230
 HICOLOR = 250,250,245
@@ -137,7 +141,8 @@ class ScrollBar(pygame.sprite.DirtySprite):
         fgColor=FGCOLOR,
         bgColor=BGCOLOR,
         hiColor=HICOLOR,
-        loColor=LOCOLOR):
+        loColor=LOCOLOR,
+        origin=(0,0)):
 
         pygame.sprite.Sprite.__init__(self,group)
         self.initTopleft = initRect.topleft
@@ -158,7 +163,8 @@ class ScrollBar(pygame.sprite.DirtySprite):
         self.scrolling = False
         self.leftTop = [0,0]
         self.diff = [0,0]
-        self.diff[self.axis] = self.initTopleft[self.axis]
+        #self.diff[self.axis] = self.initTopleft[self.axis]
+        self.diff = (self.initTopleft[0]+origin[0],self.initTopleft[1]+origin[1])
         self.dirty = True
         self.pad = pad
         self.pretty = pretty
@@ -169,7 +175,7 @@ class ScrollBar(pygame.sprite.DirtySprite):
         self.prettySize[self.oppAxis] = self.thick - (2 * pad)
  
     def update(self, event): # event must not be None
-        """ Called by user with mouse events. event must not be none. """        
+        """ Called by user with mouse events. event must not be none. """
         if event.type is MOUSEMOTION and self.scrolling:
             self.scroll(event.rel[self.axis])
         
@@ -197,7 +203,7 @@ class ScrollBar(pygame.sprite.DirtySprite):
             knobMoves[axis] = knobMove
             self.knob.move_ip(knobMoves)
             self.leftTop[self.axis] += knobMove / self.ratio
-            self.dirty = True    
+            self.dirty = True
 
     def draw(self, surface):
         """ Blits sprite image to a surface if it exists.

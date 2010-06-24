@@ -5,8 +5,7 @@
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
-# the Free Software Foundation; either version 2 of the License, or
-# (at your option) any later version.
+# the Frjur option) any later version.
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -26,7 +25,7 @@ import shutil
 import sqlite3
 
 from dbphoto import *
-
+import display
 #pick up activity globals
 from xophotoactivity import *
 
@@ -97,9 +96,11 @@ class Datastore_SQLite():
                     if len(rows) == 0:
                         #may need to add date entered into ds (create date could be confusing)
                         self.db.put_ds_into_picture(ds.object_id)
+                        self.db.add_image_to_album(display.journal_id,ds.object_id)
                         added += 1
                     else: #assume that pictures are returned in last in first out order
-                        a_row_found = True
+                        #a_row_found = True
+                        pass
             ds.destroy()
         _logger.debug('added %s datastore object ids from datastore to picture'%added)
         return (count,added,)

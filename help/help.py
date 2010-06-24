@@ -98,7 +98,6 @@ class Help(Window):
 
         self.toolbox.set_current_toolbar(HELP_PANE)
 
-        self._web_view.load_uri(HOME)
 
     def get_help_toolbar(self):
         return self.help_toolbar
@@ -119,6 +118,7 @@ class Help(Window):
         self.help_id = util.unique_id()
         wm.set_activity_id(window.window, self.help_id)
         self.help_window = window
+        self._web_view.load_uri(HOME)
             
     def activate_help(self):
         _logger.debug('activate_help called')

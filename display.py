@@ -34,6 +34,8 @@ from pygame.locals import *
 
 from sugar.datastore import datastore
 from sugar.graphics.alert import *
+from sugar import profile
+
 import sys, os
 import gtk
 import shutil
@@ -66,7 +68,7 @@ screen_w = 0
 
 #thickness of scroll bar
 thick = 15
-sb_padding = 6
+sb_padding = 2
 background_color = (210,210,210)
 album_background_color = (170,170,170)
 album_selected_color = (210,210,210)
@@ -91,6 +93,11 @@ console_handler = logging.StreamHandler()
 console_formatter = logging.Formatter('%(name)s %(levelname)s %(funcName)s: %(lineno)d||| %(message)s')
 console_handler.setFormatter(console_formatter)
 _logger.addHandler(console_handler)
+_logger.debug('color %s'%profile.get_color().to_string())
+profile_colors = profile.get_color().to_string()
+color_list = profile_colors.split(',')
+color_1 = color_list[0]
+color_2 = color_list[1]
 
 class PhotoException(Exception):
     def __init__(self,value):
@@ -100,12 +107,17 @@ class PhotoException(Exception):
         
 class OneThumbnail():
     def __init__(self,rows,db,target,index=0,save_to_db=True):
+        """note to myself:
+        surface is the square region that is painted on the world
+        thumbnail is the subsurface of surface (it's parent)
+        thumbnail has its dimensions set to reflect the aspect ratio of image
+        """
         self.rows = rows
         self.db = db
         self.target = target
         self.row_index = index
         self.save_to_db = save_to_db
-        self.border = 5
+        self.border = 10
         self.x = 200
         self.y = 200
         self.size_x = 800
@@ -114,29 +126,67 @@ class OneThumbnail():
         self.background = (200,200,200)
         self.scaled = None
         self.from_database = False
+        self.thumbnail = None
         
-    def paint_thumbnail(self):
+    def paint_thumbnail(self,
+                        target,
+                        pos_x,
+                        pos_y,
+                        size_x,
+                        size_y,
+                        selected):
         """
         Put an image on pygame screen.
         Inputs: 1. cursor pointing to picture records of xophoto.sqlite
                 2. Index into cursor
         """
+        self.target = target
+        self.x = pos_x
+        self.y = pos_y
+        self.size_x = size_x
+        self.size_y = size_y
         if not self.scaled:
             i = self.db.row_index('jobject_id','picture')
             id = self.rows[self.row_index]['jobject_id']
-            self.surface = pygame.Surface((self.size_x,self.size_y,))
+            self.surface = pygame.Surface((size_x,size_y,))
             self.surface.fill(background_color)
-            self.scaled = self.scale_image(id,self.size_x,self.size_y)
+            self.scaled = self.scale_image(id,size_x,size_y)
             if not self.scaled: return
             if self.aspect >= 1.0:
                 self.subsurface_x = self.border
-                self.subsurface_y = (self.size_y - self.y_thumb) // 2
+                self.subsurface_y = (size_y - self.y_thumb) // 2
             else:
                 self.subsurface_y = self.border
-                self.subsurface_x = (self.size_x - self.x_thumb) // 2
-        self.thumbnail = self.surface.subsurface([self.subsurface_x,self.subsurface_y,self.x_thumb,self.y_thumb])
+                self.subsurface_x = (size_x - self.x_thumb) // 2
+            self.thumbnail = self.surface.subsurface([self.subsurface_x,self.subsurface_y,self.x_thumb,self.y_thumb])
+        if selected:
+            self.select()
+        else:
+            self.unselect()
+        #_logger.debug('image painted at %s,%s'%(pos_x,pos_y,))
+        
+    def unselect(self):
+        if not self.thumbnail: return self
+        self.surface.fill(background_color)
         self.thumbnail.blit(self.scaled,[0,0])
         self.target.blit(self.surface,[self.x,self.y])
+        return self
+    
+    def select(self):
+        if not self.thumbnail: return self
+        r,g,b = self.get_rgb(color_2)
+        self.surface.fill((r,g,b))
+        r,g,b = self.get_rgb(color_1)
+        pygame.draw.rect(self.surface,(r,g,b),(0,0,self.size_x,self.size_y),self.border)
+        self.thumbnail.blit(self.scaled,[0,0])
+        self.target.blit(self.surface,[self.x,self.y])
+        return self
+        
+    def get_rgb(self,hex_no):
+        r = int('0x'+hex_no[1:3],16)
+        g = int('0x'+hex_no[3:5],16)
+        b = int('0x'+hex_no[5:],16)
+        return (r,g,b)
         
     def scale_image(self,id, x_size, y_size):
         """
@@ -218,19 +268,6 @@ class OneThumbnail():
     def set_border(self,b):
         self.border = b
 
-    def select(self):
-        self.surface.fill(selected_color)
-        self.thumbnail.blit(self.scaled,[0,0])
-        self.target.blit(self.surface,[self.x,self.y])
-        return self
-        
-    def unselect(self):
-        self.surface.fill(background_color)
-        self.thumbnail.blit(self.scaled,[0,0])
-        self.target.blit(self.surface,[self.x,self.y])
-        return self
-        
-        
 class OneAlbum():
     """
     Receives  an open database object refering to
@@ -247,13 +284,16 @@ class OneAlbum():
         self.screen_origin_x = 000
         self.screen_origin_y = 000
         self.pict_per_row = 5
-        self.num_rows = 4
         self.origin_row = 0
         self.display_end_index = 0
         self.jobject_id = None
+        self.sb = None
+        
+        #thumbnail_surface is the viewport into thumbnail_world, mapped to screen for each album
         self.thumbnail_world = None
-        self.thumbnail_surface = pygame.Surface((screen_w-album_column_width-thick,screen_h)).convert()
+        self.thumbnail_surface = pygame.Surface((screen_w-album_column_width,screen_h)).convert()
         self.thumbnail_surface.fill(background_color)
+        self.num_rows = 1
         
         #variable for remembering the state of the thumbnail display
         self.display_start_index = 0
@@ -265,7 +305,7 @@ class OneAlbum():
         self.xy_size = screen_max // self.pict_per_row
 
         
-    def paint(self):
+    def paint(self,new_surface=False):
         """
         Put multiple images on pygame screen.
         """
@@ -278,54 +318,62 @@ class OneAlbum():
         #protect from an empty database
         if len(self.rows) == 0: return
         num_rows = int(len(self.rows) // self.pict_per_row) + 1
+        if self.thumbnail_world and num_rows == self.num_rows and not new_surface:
+            self.repaint()
+            return
+
         self.thumbnail_world = pygame.Surface((screen_w-album_column_width-thick,self.xy_size*num_rows))
         self.thumbnail_world.fill(background_color)
-        y_size = self.xy_size
-        x_size = self.xy_size
-
         num_pict = len(self.rows)
-        _logger.debug('display many thumbnails in range %s,%s'%(self.display_start_index, num_pict + self.display_start_index,))
+        self.num_rows = num_rows        
+        _logger.debug('display many thumbnails in range %s,world y:%s'%(num_pict, self.xy_size*num_rows,))
         for i in range(num_pict):
             if not self.pict_dict.has_key(i):
                 self.pict_dict[i] = OneThumbnail(self.rows,self.db,self.thumbnail_world,i)
             row = i // self.pict_per_row
-            pos_x = (i % self.pict_per_row) * x_size
-            pos_y = (row  - self.origin_row) * y_size
-            self.pict_dict[i].position(pos_x,pos_y)
-            #_logger.debug('calling paint with size(%s,%s) and position(%s,%s)'%(x_size,y_size,pos_x,pos_y,))
-            self.pict_dict[i].size(x_size,y_size)
-            self.pict_dict[i].paint_thumbnail()
+            pos_x = (i % self.pict_per_row) * self.xy_size
+            pos_y = (row  - self.origin_row) * self.xy_size
+            selected = self.thumb_index == i
+            self.pict_dict[i].paint_thumbnail(self.thumbnail_world,pos_x,pos_y,self.xy_size,self.xy_size,selected)
             if not self.pict_dict[i].from_database:
-                surf = self.thumbnail_panel(self.thumbnail_world)
-                screen.blit(surf,(album_column_width,0))
-                pygame.display.flip()
-        surf = self.thumbnail_panel(self.thumbnail_world)
-        screen.blit(surf,(album_column_width,0))
-        screen.blit(self.thumbnail_world,(album_column_width,0))
-        self.select_pict(self.thumb_index)
+                self.repaint()
+        self.repaint()
+        
+    def repaint(self):
+        self.thumbnail_surface = self.thumbnail_panel(self.thumbnail_world)
+        #surf = self.thumbnail_panel(self.thumbnail_world)
+        screen.blit(self.thumbnail_surface,(album_column_width,0))
+        #screen.blit(self.thumbnail_world,(album_column_width,0))
+        #self.select_pict(self.thumb_index)
+        pygame.display.flip
        
     def thumbnail_panel(self,world):
         #modeled after ezscrollbar example
-        scrollRect = pygame.Rect(screen_w - album_column_width - thick, 0, screen_w-album_column_width-sb_padding, screen_h)
-        excludes = ((0, 0), (screen_w-album_column_width-thick,screen_h)) # rect where sb update is a pass
-        group = pygame.sprite.RenderPlain()    
-        self.sb = ScrollBar(
-            group,
-            world.get_height(),
-            scrollRect,
-            self.thumbnail_surface,
-            1,
-            excludes,
-            4,
-            False,
-            thick,
-            #(170,220,180),
-            (255,255,255),
-            (200,210,225),
-            (240,240,250),
-            (0,55,100))    
+        #following scrollRect definition changed to be surface rather than screen relative
+        # -- the added origin parameter to ScrollBar helps scrollRect become screen relative
+        if not self.sb:
+            scrollRect = pygame.Rect((screen_w - album_column_width - thick, 0), (thick, screen_h))
+            excludes = ((0, 0), (screen_w-thick,screen_h)) # rect where sb update is a pass
+            group = pygame.sprite.RenderPlain()    
+            self.sb = ScrollBar(
+                group,
+                world.get_height(),
+                scrollRect,
+                self.thumbnail_surface,
+                1,
+                excludes,
+                4,
+                False,
+                thick,
+                #(170,220,180),
+                (255,255,255),
+                (200,210,225),
+                (240,240,250),
+                (0,55,100),
+                #translator from surface to screen: (conceptualized as origin)
+                (album_column_width,0))    
         self.sb.draw(self.thumbnail_surface)
-        self.thumbnail_surface.blit(world, (album_column_width,0),(self.sb.get_scrolled(),(screen_w-album_column_width-thick,screen_h)))  
+        self.thumbnail_surface.blit(world, (0,0),(self.sb.get_scrolled(),(screen_w-album_column_width,screen_h)))  
         return self.thumbnail_surface
     
     def clear(self):
@@ -406,19 +454,34 @@ class OneAlbum():
         self.jobject_id = jobject_id
 
     def click(self,x,y):
-        #first determine if the x,y pair are within the displayed thumbnails
-        thumb_index = int((y // self.xy_size) * self.pict_per_row + \
-            (x - album_column_width) // self.xy_size) + self.display_start_index
-        if thumb_index <= self.display_end_index:
+        #map from thumbnail_surface to thumbnail_world
+        if self.sb:
+            (sb_x,sb_y) = self.sb.get_scrolled()
+        else:
+            (sb_x,sb_y) = [0,0]
+        thumb_index = int(((y + sb_y) // self.xy_size) * self.pict_per_row + \
+            (x - album_column_width) // self.xy_size)
+        _logger.debug('click index:%s'%thumb_index)
+        if thumb_index < len(self.rows):
             self.thumb_index = thumb_index
-            self.select_pict(self.thumb_index)
+        else:
+            self.thumb_index = len(self.rows)
+        self.select_pict(self.thumb_index)
             
     def get_jobject_id_at_xy(self,x,y):
-        #first determine if the x,y pair are within the displayed thumbnails
-        thumb_index = int((y // self.xy_size) * self.pict_per_row + (x - album_column_width) // self.xy_size)
-        if thumb_index <= self.display_end_index:
-             return self.rows[thumb_index]['jobject_id']
-        return 
+        #x and y are relative to thumbnail_surface, figure out first mapping to the world
+        if self.sb:
+            (sb_x,sb_y) = self.sb.get_scrolled()
+        else:
+            (sb_x,sb_y) = [0,0]
+        thumb_index = int(((y + sb_y) // self.xy_size) * self.pict_per_row + (x - album_column_width) // self.xy_size)
+        if thumb_index >= len(self.rows):
+            thumb_index = len(self.rows)-1
+        try:
+            id = self.rows[thumb_index]['jobject_id']
+            return id
+        except:
+            return None
 
     def toggle(self,x,y):
         if not self.large_displayed:
@@ -460,23 +523,37 @@ class OneAlbum():
     def number_of_rows(self,num):
         self.num_rows = num
         
+    def make_visible(self,num):
+        x,y = self.sb.get_scrolled()
+        row = num // self.pict_per_row
+        min_y = row * self.xy_size
+        if min_y < y:
+            self.sb.scroll(-self.xy_size * self.sb.ratio)
+        max_y = (row + 1) * self.xy_size
+        if max_y > y + screen_h:
+            self.sb.scroll(self.xy_size * self.sb.ratio)
+        self.repaint()
+        
     def select_pict(self,num):
         if self.last_selected:
             self.last_selected.unselect()
         if not self.pict_dict.has_key(num): return
+        self.make_visible(num)
         self.last_selected = self.pict_dict[num].select()
         if self.large_displayed:
             self.one_large()
-        screen.blit(self.thumbnail_world,(album_column_width,0))
+        #screen.blit(self.thumbnail_world,(album_column_width,0))
+        #self.thumbnail_panel(self.thumbnail_world)
+        self.repaint()
 
     def next(self):
         if self.thumb_index < len(self.rows)-1:
             self.thumb_index += 1
             #self.display_start_index = self.thumb_index
-            if self.thumb_index  >= (self.origin_row + self.num_rows) * self.pict_per_row:
-                self.origin_row += 1
-                self.paint()
             self.select_pict(self.thumb_index)
+            #if self.thumb_index  >= (self.origin_row + self.num_rows) * self.pict_per_row:
+                #self.origin_row += 1
+            self.paint()
             
     def next_row(self):
         if self.thumb_index // self.pict_per_row < len(self.rows) // self.pict_per_row:
@@ -549,7 +626,7 @@ class DisplayAlbums():
         self.album_surface.fill(background_color)
         
         #if the albums table is empty, populate it from the journal, and initialize
-        sql = "select * from groups"
+        sql = "select * from groups where category = 'albums'"
         rows,cur = self.db.dbdo(sql)        
         i = 0    
         if len(rows) == 0: #it is not initialized
@@ -585,7 +662,8 @@ class DisplayAlbums():
     def display_thumbnails(self,album_id):
         """uses the album (a datetime str) as value for category in table groups
         to display thumbnails on the right side of screen"""
-        self.album_objects[self.selected_album_id].clear()
+        self.selected_album_id = album_id
+        #self.album_objects[self.selected_album_id].clear()
         self.album_objects[self.selected_album_id].last_selected = None        
         alb_object = self.album_objects.get(self.selected_album_id)
         if alb_object:
@@ -612,7 +690,7 @@ class DisplayAlbums():
         global thick
         global sb_padding
         #thick = 15
-        scrollRect = pygame.Rect(album_column_width - thick, 0, album_column_width-sb_padding, screen_h)
+        scrollRect = pygame.Rect(album_column_width - thick, 0, thick, screen_h)
         excludes = ((0, 0), (album_column_width-thick,screen_h)) # rect where sb update is a pass
         group = pygame.sprite.RenderPlain()    
         self.sb = ScrollBar(
@@ -663,7 +741,7 @@ class DisplayAlbums():
         self.album_rows = rows
 
     def click(self,x,y):
-        """select the pointed to item"""
+        """select the pointed to album"""
         #get the y index
         sb_x,sb_y = self.sb.get_scrolled()
         y_index = (y + sb_y) // self.album_height 
@@ -683,8 +761,14 @@ class DisplayAlbums():
             return
         self.selected_album_id = album_name
         _logger.debug('now display the thumbnails with the album identifier %s'%album_name)
-        self._activity.activity_toolbar.title.set_text(album_title)
+        change_name = True
+        for id,name in  self.predefined_albums:
+            if album_name == id:
+                change_name = False
+        if change_name:
+            self._activity.activity_toolbar.title.set_text(album_title)
         self.display_thumbnails(album_name)
+        pygame.display.flip()
         
     def add_to_current_album(self,jobject_id,name=None):
         """if no current album create one. if name supplied use it
@@ -994,12 +1078,25 @@ class Application():
 
                     if x < album_column_width:
                         self.album_collection.sb.update(event)
-                    changes = self.album_collection.sb.draw(self.album_collection.album_surface)
-                    if len(changes) > 0:
-                        changes.append(self.album_collection.album_surface.blit(self.album_collection.world, (0,0),
-                              (self.album_collection.sb.get_scrolled(),(album_column_width-thick,screen_h))))
-                    screen.blit(self.album_collection.album_surface,(0,0))
-                    pygame.display.update(changes)
+                        changes = self.album_collection.sb.draw(self.album_collection.album_surface)
+                        if len(changes) > 0:
+                            changes.append(self.album_collection.album_surface.blit(self.album_collection.world, (0,0),
+                                  (self.album_collection.sb.get_scrolled(),(album_column_width-thick,screen_h))))
+                            screen.blit(self.album_collection.album_surface,(0,0))
+                            pygame.display.update(changes)
+                    else:
+                        album_id = self.album_collection.selected_album_id
+                        thumb_surf_obj = self.album_collection.album_objects.get(album_id,None)
+                        if thumb_surf_obj and thumb_surf_obj.sb:
+                            thumb_surf_obj.sb.update(event)
+                            thumb_changes =  thumb_surf_obj.sb.draw(thumb_surf_obj.thumbnail_surface)
+                            if len(thumb_changes) > 0:
+                                thumb_surf_obj.thumbnail_surface.blit(thumb_surf_obj.thumbnail_world,
+                                                    (0,0),(thumb_surf_obj.sb.get_scrolled(),
+                                                    (screen_w-album_column_width, screen_h)))
+                                thumb_changes.append(pygame.Rect(album_column_width,0,screen_w-album_column_width,screen_h))                                                
+                                screen.blit(thumb_surf_obj.thumbnail_surface,(album_column_width,0))
+                                pygame.display.update(thumb_changes)
                         
                 
     def drag(self,event):
@@ -1040,7 +1137,7 @@ class Application():
             if not rtn_val:
                 #create a new album
                 pass
-        elif x > album_column_width:
+        elif x > album_column_width and x < (screen_w - thick):
             if l:
                 self.album_collection.album_objects[self.album_collection.selected_album_id].click(x,y)
             elif r: 

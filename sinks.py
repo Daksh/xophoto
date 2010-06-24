@@ -34,6 +34,10 @@ from sources import *
 #pick up activity globals
 from xophotoactivity import *
 
+import logging
+_logger = logging.getLogger('xophoto')
+_logger.setLevel(logging.DEBUG)
+
 class ExportAlbum():
     
     def __init__(self,rows,db,path):
@@ -55,9 +59,13 @@ class ExportAlbum():
                 raise PhotoException('cannot create directory(s) at %s'%self.target)
         for row in self.rows:
             jobject_id = row['jobject_id']
-            fn = self.sources.get_filename_from_jobject_id(jobject_id)
+            ds_object = datastore.get(jobject_id)
+            if not ds_object:
+                _logger.debug('failed to fetch ds object %s'%jobject_id)
+                return
+            fn = ds_object.get_file_path()
             mime_type = self.db.get_mime_type(jobject_id)
-            lookup = {'image/png':'.png','image/jpg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
+            lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
             base = os.path.basename(fn).split('.')
             #don't override a suffix that exists
             if len(base) == 1:
@@ -66,5 +74,6 @@ class ExportAlbum():
                 base = os.path.basename(fn)
             _logger.debug('exporting %s to %s'%(fn,os.path.join(self.path,base),))
             shutil.copy(fn,os.path.join(self.path,base))
+            ds_object.destroy()
 
                         

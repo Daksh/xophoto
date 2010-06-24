@@ -38,14 +38,16 @@ import gtk
 import pygame
 from sugar.activity import activity
 from sugar.graphics.toolbutton import ToolButton
+from sugar import profile
+
 import gobject
 import sugargame.canvas
 import os
 import shutil
 from threading import Timer
 from subprocess import Popen, PIPE
-from help.help import Help
 
+from help.help import Help
 import display
 from display import *
 import photo_toolbar
@@ -289,27 +291,51 @@ class XoPhotoActivity(activity.Activity):
     def use_toolbar_doexport_cb(self,use_toolbar):
         if not self.file_tree:
             self.file_tree = FileTree(self.game.db)
-        path = self.file_tree.get_path()
+        base_path = self.file_tree.get_path()
         
         #think about writing the whole journal, and the trash (would need to add these to the selectable paths)
         pygame.display.flip
-        if path:
-            _logger.debug("write selected album to %s"%path)
+        if base_path:
+            _logger.debug("write selected album to %s"%base_path)
                         
             #figure out how to access correct object model:album_name = self.album_rows[self.selected_index]['subcategory']
             #generate a list of dictionary rows which contain the info about images to write
-            album_object = self.game.albums
-            album_name = album_object.album_rows[int(album_object.selected_index)]['subcategory']
+            album_object = self.game.album_collection
+            
+            album_id = album_object.album_rows[int(album_object.album_index)]['subcategory']
+            album_name = album_object.album_rows[int(album_object.album_index)]['jobject_id']
+            safe_name = album_name.replace(' ','_')
+            new_path = self.non_conflicting(base_path,safe_name)
+            _logger.debug('album_id is %s new path:%s'%(album_id,new_path))
             sql = """select pict.*, grp.* from picture as pict, groups as grp \
                   where grp.category = ? and grp.jobject_id = pict.jobject_id"""
             cursor = album_object.db.con.cursor()
-            cursor.execute(sql,(album_name,))
+            cursor.execute(sql,(album_id,))
             rows = cursor.fetchall()
             
             _logger.debug('album to export: %s. Number of pictures found: %s'%(album_name,len(rows),))
             #def __init__(self,rows,db,sources,path):
-            exporter = ExportAlbum(rows,self.game.db,path)
+            exporter = ExportAlbum(rows,self.game.db,new_path)
             exporter.do_export()
+
+    def non_conflicting(self,root,basename):
+        """
+        create a non-conflicting filename by adding '-<number>' to a filename before extension
+        """
+        ext = ''
+        basename = basename.split('.')
+        word = basename[0]
+        if len(basename) > 1:
+            ext = '.' + basename[1]
+        adder = ''
+        index = 0
+        while (os.path.isfile(os.path.join(root,word+adder+ext)) or 
+                                os.path.isdir(os.path.join(root,word+adder+ext))):
+            index +=1
+            adder = '-%s'%index
+        _logger.debug('non conflicting:%s'%os.path.join(root,word+adder+ext))
+        return os.path.join(root,word+adder+ext)
+    
             
     
     def use_toolbar_doupload_cb(self,use_toolbar):

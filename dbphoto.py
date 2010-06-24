@@ -263,6 +263,9 @@ class DbAccess():
                            (str(album_id),'',str(jobject_id),old_seq + 20))
         self.con.commit()
             
+    def change_sequence(self,rows,subject_index,new_index):
+        pass
+    
     def table_exists(self,table):
         try:
             sql = 'select  * from %s'%table
