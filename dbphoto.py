@@ -26,6 +26,7 @@ from  sqlite3 import dbapi2 as sqlite
 from sqlite3 import *
 import sqlite3
 import hashlib
+import time
 
 #pick up activity globals
 from xophotoactivity import *
@@ -98,8 +99,10 @@ class DbAccess():
         
     def get_mime_list(self):
         mime_list =[]
-        self.cur.execute('select * from config where name ="mime_type"')
-        rows = self.cur.fetchall()
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute('select * from config where name ="mime_type"')
+        rows = cur.fetchall()
         for m in rows:
             mime_list.append(m[2])
         return mime_list
@@ -116,13 +119,29 @@ class DbAccess():
         cursor.execute('select * from groups where category = ?',('albums',))
         return cursor.fetchall()
     
-    def get_album_thumbnails(self,album_id):
-        sql = """select pict.*, grp.* from picture as pict, groups as grp \
-              where grp.category = ? and grp.jobject_id = pict.jobject_id order by create_date desc"""
+    def get_album_thumbnails(self,album_id,is_journal=False):
+        if not is_journal: #want most recent first, need left join because picture may not exist yet
+            #sql = """select groups.*, picture.* from  groups left join picture  \
+                  #where groups.category = ? and groups.jobject_id = picture.jobject_id order by groups.seq desc"""
+            sql = """select groups.* from  groups where groups.category = ? order by groups.seq desc"""
+        else:
+            #sql = """select groups.*, picture.* from groups left join picture  \
+                  #where groups.category = ? and groups.jobject_id = picture.jobject_id order by groups.seq """
+            sql = "select * from groups where category = ? order by seq"
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
         return cursor.fetchall()
     
+    def get_thumbnail_count(self,album_id):
+        conn = self.connection()
+        cursor = conn.cursor()
+        cursor.execute('select count(*) as count from groups where category = ?',(str(album_id),))
+        rows = cursor.fetchall()
+        if len(rows) == 1:
+            return rows[0]['count']
+        else:
+            return -1
+        
     def create_picture_record(self,object_id, fn):
         """create a record in picture pointing to unique pictures in the journal.
            Use md5 checksum to test for uniqueness
@@ -130,6 +149,7 @@ class DbAccess():
            returns number of records added
         """
         _logger.debug('create_picture_record object_id:%s  file: %s'%(object_id,fn,))
+        start= time.clock()
         #if object_id == '': return
         
         #we'll calculate the md5, check it against any pictures, and store it away
@@ -154,6 +174,7 @@ class DbAccess():
             cursor = self.connection().cursor()
             cursor.execute(sql)                
             self.con.commit()
+            _logger.debug('%s seconds to insert'%(time.clock()-start))
             return 1
         elif len(rows) == 1:
             sql = """update picture set in_ds = ?, mount_point = ?, orig_size = ?, \
@@ -161,6 +182,7 @@ class DbAccess():
             cursor = self.connection().cursor()
             cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,len(rows_md5)))             
             self.con.commit()            
+            _logger.debug('%s seconds to update'%(time.clock()-start))
         return 0
     
     def put_ds_into_picture(self,jobject_id):
@@ -180,6 +202,7 @@ class DbAccess():
         self.connection().execute('delete from picture where in_ds = 0')
 
     def check_in_ds(self,fullpath,size):
+        """returns true/false based upon identity of file path and image size"""
         sql = "select * from picture where mount_point = '%s' and orig_size = %s"%(fullpath,size,)
         self.cur.execute(sql)
         rows = self.cur.fetchall()
@@ -187,6 +210,9 @@ class DbAccess():
         return False
 
     def get_last_album(self):
+        """returns the album_id (time stamp) of most recent id or None
+        second parameter retured is row number for update/insert
+        """
         cursor = self.connection().cursor()
         cursor.execute("select * from config where name = 'last_album'")
         rows = cursor.fetchmany()
@@ -197,7 +223,7 @@ class DbAccess():
             _logger.debug('somehow got more than one last_album record')
             cursor.execute("delete from config where name = 'last_album'")
             self.con.commit()
-        return None,0
+        return None,0 #config is initialized with mime-types so id is > 0 if last album exists
     
     def set_last_album(self,album_id):
         cursor = self.connection().cursor()
@@ -247,7 +273,8 @@ class DbAccess():
 
     def add_image_to_album(self, album_id, jobject_id):
         cursor = self.connection().cursor()
-        cursor.execute('select max(seq) as max_seq from groups where category = ? group by category',(album_id,))
+        cursor.execute('select max(seq) as max_seq from groups where category = ? group by category',
+                       (album_id,))
         rows = cursor.fetchall()
         if len(rows)>0:
             old_seq = rows[0]['max_seq']

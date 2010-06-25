@@ -88,6 +88,10 @@ class XoPhotoActivity(activity.Activity):
         self.kept_once = False
         self.util = Utilities(self)
         
+        #there appears to be an initial save yourself, asynchronous, which
+        #  in my write_file closes the database and causes sporatic failures
+        self.initial_save_yourself = False
+        
        
         if handle and handle.object_id and handle.object_id != '' and not self.use_db_template:
             _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
@@ -224,6 +228,7 @@ class XoPhotoActivity(activity.Activity):
         
     
     def copy(self):
+        """processing when the keep icon is pressed"""
         _logger.debug('entered copy which will save and re-init sql database')
         dict = self.get_metadata()
         #set a flag to copy the template
@@ -248,6 +253,7 @@ class XoPhotoActivity(activity.Activity):
         ds.metadata['activity_id'] = dict.get('activity_id')
         ds.metadata['activity'] = 'org.laptop.XoPhoto'
         ds.metadata['mime_type'] = 'application/binary'
+        ds.metadata['icon-color'] = dict.get('icon-color')
         dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance','xophoto.sqlite')
         
         #albums are stored in the groups table, so start fresh
@@ -286,7 +292,7 @@ class XoPhotoActivity(activity.Activity):
         pygame.display.flip()
         if path:
             self.file_tree.copy_tree_to_ds(path)
-            Datastore_SQLite(self.game.db).scan_images()
+            Datastore_SQLite(self.game.db).check_for_recent_images()
     
     def use_toolbar_doexport_cb(self,use_toolbar):
         if not self.file_tree:
@@ -393,12 +399,12 @@ class XoPhotoActivity(activity.Activity):
     def write_file(self, file_path):
         
         try:
-            if self.DbAccess_object:
+            if self.DbAccess_object and not self.interactive_close:
                 if self.DbAccess_object.get_error(): return  #dont save a corrupted database
                 self.DbAccess_object.closedb()
-            if self.game and self.game.db:    
-                self.game.db = None
-            self.DbAccess_object = None
+                if self.game and self.game.db:    
+                    self.game.db = None
+                self.DbAccess_object = None
             local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             #local_path = os.path.join(os.environ['SUGAR_BUNDLE_PATH'],'xophoto.sqlite')
             self.metadata['filename'] = local_path
@@ -427,6 +433,7 @@ class XoPhotoActivity(activity.Activity):
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             try:
                 self.DbAccess_object = DbAccess(dest)
+                self.game.db = self.DbAccess_object
             except Exception,e:
                 _logger.debug('database failed to re-open in write file. error:%s'%e)
                 exit()

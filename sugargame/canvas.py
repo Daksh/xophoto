@@ -46,10 +46,7 @@ class PygameCanvas(gtk.EventBox):
         translator.hook_pygame()
 
         # Restore the default cursor.
-        #the following .get_window function does not exist in build 802 of sugar
-        self._socket.get_window().set_cursor(None)
-        window = self._socket.get_parent_window()
-        window.set_cursor(None)
+        self._socket.window.set_cursor(None)
         
         # Run the Pygame main loop.
         main_fn()

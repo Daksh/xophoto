@@ -15,7 +15,17 @@
 # You should have received a copy of the GNU General Public License along
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
-#
+"""
+Notes to myself:
+the problem I'm trying to address is latency during start up.
+If there is database corruption, we need to start over with empty databases
+(similar to the first download of the application)
+What's the best I can do?
+If there are very many images in the Journal, the best I can do is a directed find
+of all the appropriate mime_types in Journal, then bring up the UI, and paint the
+thumbnail as each is generated.
+
+"""
 from gettext import gettext as _
 
 from sugar.datastore import datastore
@@ -23,6 +33,7 @@ import sys, os
 import gtk
 import shutil
 import sqlite3
+import time
 
 from dbphoto import *
 import display
@@ -77,11 +88,11 @@ class Datastore_SQLite():
         return rtn
 
     def check_for_recent_images(self):
-        """scans the journal for pictures that are not in database, records object_id if found.
-        stops checking when the first image is found that is already in the database.
+        """scans the journal for pictures that are not in database, records jobject_id if found in
+        table groups with the journal id in category. Can be faster because we don't have to fetch file itself.
         """
         mime_list = self.db.get_mime_list()
-        (results,count) = datastore.find({})
+        (results,count) = datastore.find({'mime_type':['image/jpg','image/png','image/jpeg','image/gif'],})
         _logger.debug('Journal/datastore entries found:%s'%count)
         added = 0
         a_row_found = False
@@ -91,18 +102,19 @@ class Datastore_SQLite():
             if not a_row_found:
                 dict = ds.get_metadata().get_dictionary()
                 if dict["mime_type"] in mime_list:
-                    cursor.execute('select * from picture where jobject_id = ?',(str(ds.object_id),))
+                    cursor.execute('select * from groups where category = ? and jobject_id = ?',\
+                                   (display.journal_id,str(ds.object_id),))
                     rows = cursor.fetchall()
                     if len(rows) == 0:
                         #may need to add date entered into ds (create date could be confusing)
-                        self.db.put_ds_into_picture(ds.object_id)
+                        #self.db.put_ds_into_picture(ds.object_id)
                         self.db.add_image_to_album(display.journal_id,ds.object_id)
                         added += 1
                     else: #assume that pictures are returned in last in first out order
                         #a_row_found = True
                         pass
             ds.destroy()
-        _logger.debug('added %s datastore object ids from datastore to picture'%added)
+        _logger.debug('scan found %s. Added %s datastore object ids from datastore to picture'%(count,added,))
         return (count,added,)
     
     def make_one_thumbnail(self):
@@ -179,6 +191,7 @@ class FileTree():
         added = 0        
         for dirpath, dirnames, filenames in os.walk(path):
             for filename in filenames:
+                start = time.clock()
                 abspath = os.path.join(dirpath, filename)
                 #print abs_path
                 mtype = ''
@@ -205,6 +218,7 @@ class FileTree():
                 datastore.write(ds,transfer_ownership=True)
                 self.db.create_picture_record(ds.object_id,abspath)
                 ds.destroy()
+                _logger('writing one image to datastore took %f seconds'%(time.clock-start))
                 added += 1
             return added
         return 0
