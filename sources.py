@@ -145,10 +145,17 @@ class Datastore_SQLite():
             ds_obj.destroy()
             return(fn)
         return None
+
+    def delete_jobject_id_from_datastore(self,jobject_id):
+        try:
+            datastore.delete(jobject_id)
+        except Exception,e:
+            _logger.debug('delete_jobject_id_from_datastore error: %s'%e)
     
 class FileTree():
-    def __init__(self,db):
+    def __init__(self,db,activity):
         self.db = db
+        self._activity = activity
         self.dialog = None
 
     def get_path(self):
@@ -186,43 +193,66 @@ class FileTree():
         self.dialog.destroy()
         self.dialog = None
         return fname
+    
+    def _response_cb(self,alert,response):
+        self._activity.remove_alert(alert)
+        if response == gtk.RESPONSE_CANCEL:
+            self.cancel = True
+
 
     def copy_tree_to_ds(self,path):
-        added = 0        
-        for dirpath, dirnames, filenames in os.walk(path):
-            for filename in filenames:
-                start = time.clock()
-                abspath = os.path.join(dirpath, filename)
-                #print abs_path
-                mtype = ''
-                chunks = abspath.split('.')
-                if len(chunks)>1:
-                    ext = chunks[-1]
-                    if ext == 'jpg' or ext == 'jpeg':
-                        mtype = 'image/jpg'
-                    elif ext == 'gif':
-                        mtype = 'image/gif'
-                    elif ext == 'png':
-                        mtype = 'image/png'
-                if mtype == '': continue        
-                info = os.stat(abspath)
-                size = info.st_size
-                if self.db.check_in_ds(abspath,size): continue
-                ds = datastore.create()
-                ds.metadata['filename'] = abspath
-                ds.metadata['title'] = filename
-                ds.metadata['mime_type'] = mtype
-                dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',filename)
-                shutil.copyfile(abspath,dest)
-                ds.set_file_path(dest)
-                datastore.write(ds,transfer_ownership=True)
-                self.db.create_picture_record(ds.object_id,abspath)
-                ds.destroy()
-                _logger('writing one image to datastore took %f seconds'%(time.clock-start))
-                added += 1
-            return added
-        return 0
-        
+        added = 0
+        self.cancel = False
+        proc_start = time.clock()
+        dirlist = os.listdir(path)
+        num = len(dirlist)
+        message = _('Number of images to copy to the XO Journal: ') + str(num)
+        pa_title = _('Please be patient')
+        alert = display.ProgressAlert(msg=message,title=pa_title)
+        self._activity.add_alert(alert)
+        alert.connect('response',self._response_cb)
+        for filename in dirlist:            
+            start = time.clock()
+            abspath = os.path.join(path, filename)
+            #print abs_path
+            mtype = ''
+            chunks = abspath.split('.')
+            if len(chunks)>1:
+                ext = chunks[-1]
+                if ext == 'jpg' or ext == 'jpeg':
+                    mtype = 'image/jpg'
+                elif ext == 'gif':
+                    mtype = 'image/gif'
+                elif ext == 'png':
+                    mtype = 'image/png'
+            if mtype == '': continue        
+            info = os.stat(abspath)
+            size = info.st_size
+            
+            #if path and size are equal to image already loaded, abort
+            if self.db.check_in_ds(abspath,size): continue
+            ds = datastore.create()
+            ds.metadata['filename'] = abspath
+            ds.metadata['title'] = filename
+            ds.metadata['mime_type'] = mtype
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',filename)
+            shutil.copyfile(abspath,dest)
+            ds.set_file_path(dest)
+            datastore.write(ds,transfer_ownership=True)
+            self.db.create_picture_record(ds.object_id,abspath)
+            ds.destroy()
+            _logger.debug('writing one image to datastore took %f seconds'%(time.clock()-start))
+            added += 1
+            alert.set_fraction(float(added)/num)
+            while gtk.events_pending():
+                gtk.main_iteration()
+            if self.cancel:
+                break
+
+        _logger.debug('writing all images to datastore took %f seconds'%(time.clock()-proc_start))
+        self._activity.remove_alert(alert)
+        return added
+    
     def fill_ds(self):
         path = self.get_path()
         if path:

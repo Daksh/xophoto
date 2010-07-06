@@ -72,6 +72,13 @@ class ActivityToolbar(gtk.Toolbar):
             self.delete_album.show()
             self.insert(self.delete_album,-1)
 
+            self.empty_journal_button = ToolButton()
+            self.empty_journal_button.set_stock_id('gtk-cancel')
+            self.empty_journal_button.set_tooltip(_("Empty Trash"))
+            self.empty_journal_button.hide()
+            self.empty_journal_button.connect('clicked',self.__empty_trash_clicked_cb)
+            self.insert(self.empty_journal_button,-1)
+        
 
 
         """
@@ -139,6 +146,9 @@ class ActivityToolbar(gtk.Toolbar):
     def __delete_album_clicked_cb (self,button):
         self._activity.activity_toolbar_delete_album_cb()
         
+    def __empty_trash_clicked_cb(self,button):
+        self._activity.activity_toolbar_empty_trash_cb()
+    
     def __traceback_changed_cb(self, combo):
         model = self.share.combo.get_model()
         it = self.share.combo.get_active_iter()

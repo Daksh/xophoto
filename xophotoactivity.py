@@ -87,6 +87,7 @@ class XoPhotoActivity(activity.Activity):
         self.game = None
         self.kept_once = False
         self.util = Utilities(self)
+        self.db_sanity_check = False
         
         #there appears to be an initial save yourself, asynchronous, which
         #  in my write_file closes the database and causes sporatic failures
@@ -102,6 +103,11 @@ class XoPhotoActivity(activity.Activity):
             _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
         
         activity.Activity.__init__(self, handle, create_jobject = self.make_jobject)
+        #does activity init execute the read? check if dbobject is reliably open
+        if self.DbAccess_object:
+            _logger.debug('database object is_open:%s'%self.DbAccess_object.is_open())
+        else:
+            _logger.debug('after activity init, read has not been called')
         self.make_jobject = False
 
         #following are essential for interface to Help
@@ -154,6 +160,8 @@ class XoPhotoActivity(activity.Activity):
         self.toolbox.add_toolbar(_('Edit'), self.edit_toolbar)
         self.edit_toolbar.connect('do-import',
                 self.edit_toolbar_doimport_cb)
+        self.edit_toolbar.connect('do-initialize',
+                self.edit_toolbar_doinitialize_cb)
         self.edit_toolbar.connect('do-stop',
                 self.__stop_clicked_cb)
         self.edit_toolbar.show()
@@ -217,6 +225,22 @@ class XoPhotoActivity(activity.Activity):
         if not response == gtk.RESPONSE_OK:return
         self.game.album_collection.delete_album(album_id)
 
+    def activity_toolbar_empty_trash_cb(self):
+        self.util.confirmation_alert(_('Are you sure you want to proceed?'),\
+                              _('Warning! you are about to completely remove these images from your XO.'),\
+                                self.empty_trash_cb)
+        
+    def empty_trash_cb(self,alert,response,album_id=trash_id):
+        if not response == gtk.RESPONSE_OK:return
+        rows = self.DbAccess_object.get_album_thumbnails(album_id)
+        for row in rows:
+            jobject_id = str(row['jobject_id'])
+            Datastore_SQLite(self.game.db).delete_jobject_id_from_datastore(jobject_id)
+            self.DbAccess_object.delete_all_references_to(jobject_id)
+        if self.game.album_collection:
+            self.game.album_collection.display_thumbnails(trash_id,new_surface=True)
+            self.game.album_collection.paint_albums()
+    
     def command_line(self,cmd, alert_error=False):
         _logger.debug('command_line cmd:%s'%cmd)
         p1 = Popen(cmd,stdout=PIPE, shell=True)
@@ -267,36 +291,24 @@ class XoPhotoActivity(activity.Activity):
         datastore.write(ds,transfer_ownership=True)
         ds.destroy()
         
-        #check the thumbnails
-        cursor.execute('pragma data_cache.quick_check')
-        rows = cursor.fetchall()
-        if len(rows) == 1 and str(rows[0]) == 'ok':
-            #thumbnails database is ok
-            _logger.debug('thumbnail database passes quick_check')
-        else:
-            #need to start over with a new template and regenerate the thumbnails
-            _logger.debug('swapping in template for transforms (thumbnail) database')
-                
-            try: 
-                source = os.path.join(os.getcwd(),'data_cache.sqlite.template')
-                local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','data_cache.sqlite')
-                shutil.copy(source,local_path)
-            except Exception,e:
-                _logger.debug('data_cache template failed to copy error:%s'%e)
-                exit()
         
     def edit_toolbar_doimport_cb(self, view_toolbar):
         if not self.file_tree:
-            self.file_tree = FileTree(self.game.db)
+            self.file_tree = FileTree(self.game.db,self)
         path = self.file_tree.get_path()
         pygame.display.flip()
         if path:
             self.file_tree.copy_tree_to_ds(path)
             Datastore_SQLite(self.game.db).check_for_recent_images()
+   
+    def edit_toolbar_doinitialize_cb(self, view_toolbar):
+        self.empty_trash_cb(None,gtk.RESPONSE_OK,journal_id)
+        self.read_file(None,initialize=True)
+
     
     def use_toolbar_doexport_cb(self,use_toolbar):
         if not self.file_tree:
-            self.file_tree = FileTree(self.game.db)
+            self.file_tree = FileTree(self.game.db,self)
         base_path = self.file_tree.get_path()
         
         #think about writing the whole journal, and the trash (would need to add these to the selectable paths)
@@ -350,10 +362,12 @@ class XoPhotoActivity(activity.Activity):
     def use_toolbar_doslideshow_cb(self,use_toolbar):
         pass
     
-    def read_file(self, file_path):
+    def read_file(self, file_path, initialize=False):
         _logger.debug('started read_file %s. make_file flag %s'%(file_path,self.make_jobject))
-        if self.make_jobject:  #make jobject is flag signifying that we are not resuming activity
+        if self.make_jobject or initialize:  #make jobject is flag signifying that we are not resuming activity
             _logger.debug(' copied template  rather than resuming')
+            if self.DbAccess_object:
+                self.DbAccess_object.closedb()
             
             #This is a new invocation, copy the sqlite database to the data directory
             source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
@@ -367,7 +381,7 @@ class XoPhotoActivity(activity.Activity):
             #now do the same for the thumbnails if they don't already exist        
             source = os.path.join(os.getcwd(),'data_cache.sqlite.template')
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','data_cache.sqlite')
-            if not os.path.isfile(dest):
+            if not os.path.isfile(dest) or initialize:
                 try:
                     shutil.copy(source,dest)
                 except Exception,e:
@@ -380,7 +394,7 @@ class XoPhotoActivity(activity.Activity):
             dict = self.get_metadata()
             _logger.debug('title was %s'%dict.get('title','no title given'))
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-            _logger.debug('reading from %s and writeing to %s'%(file_path,dest,))
+            _logger.debug('reading from %s and writing to %s'%(file_path,dest,))
             try:
                 shutil.copy(file_path, dest)
                 _logger.debug('completed writing the sqlite file')
@@ -393,8 +407,49 @@ class XoPhotoActivity(activity.Activity):
         except Exception,e:
             _logger.debug('database failed to open in read file. error:%s'%e)
             exit()
-        _logger.debug('completed read_file. DbAccess_jobject is created')
+            
+        #if this is the first time the databases are to be used this invocation?
+        #if the databases are not well formed, rebuild from a template
+        if not self.db_sanity_check:
+            self.db_sanity_check = True
+            conn = self.DbAccess_object.connection()
+            c = conn.cursor()
+            c.execute('pragma quick_check')
+            rows = c.fetchall()
+            if len(rows) == 1 and str(rows[0][0]) == 'ok':
+                #main database is ok
+                _logger.debug('xophoto database passes quick_check')
+            else:
+                #need to start over with a new template and regenerate the thumbnails
+                _logger.debug('swapping in template for xophoto.sqlite database')
+                    
+                try: 
+                    source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
+                    local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+                    shutil.copy(source,local_path)
+                except Exception,e:
+                    _logger.debug('xophoto template failed to copy error:%s'%e)
+                    exit()
+               
+            #check the thumbnails
+            c.execute('pragma data_cache.quick_check')
+            rows = c.fetchall()
+            if len(rows) == 1 and str(rows[0][0]) == 'ok':
+                #thumbnails database is ok
+                _logger.debug('thumbnail database passes quick_check')
+            else:
+                #need to start over with a new template and regenerate the thumbnails
+                _logger.debug('swapping in template for transforms (thumbnail) database')
+                    
+                try: 
+                    source = os.path.join(os.getcwd(),'data_cache.sqlite.template')
+                    local_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','data_cache.sqlite')
+                    shutil.copy(source,local_path)
+                except Exception,e:
+                    _logger.debug('data_cache template failed to copy error:%s'%e)
+                    exit()
                 
+        _logger.debug('completed read_file. DbAccess_jobject is created')        
         
     def write_file(self, file_path):
         
@@ -455,6 +510,9 @@ class EditToolbar(gtk.Toolbar):
         'do-import': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([])),
+        'do-initialize': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
         'do-stop': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([]))
@@ -471,8 +529,9 @@ class EditToolbar(gtk.Toolbar):
         self.doimport.show()
         
         self.delete_comment = ToolButton()
-        self.delete_comment.set_stock_id('gtk-stock-delete')
-        self.delete_comment.set_tooltip(_("Remove Picture"))
+        self.delete_comment.set_stock_id('gtk.stock-delete')
+        self.delete_comment.set_tooltip(_("Re-Inialize the Databass -- for startup testing"))
+        self.delete_comment.connect('clicked',self.do_initialize)
         self.delete_comment.show()
         self.insert(self.delete_comment,-1)
         
@@ -489,11 +548,11 @@ class EditToolbar(gtk.Toolbar):
         tool_item.add(self.entry)
         self.entry.show()
         self.insert(tool_item, -1)
-        tool_item.show()
+        tool_item.hide()
 
         self.add_comment = ToolButton('list-add')
         self.add_comment.set_tooltip(_("Add Annotation"))
-        self.add_comment.show()
+        self.add_comment.hide()
         self.insert(self.add_comment,-1)
 
         separator = gtk.SeparatorToolItem()
@@ -510,6 +569,9 @@ class EditToolbar(gtk.Toolbar):
 
     def doimport_cb(self, button):
         self.emit('do-import')
+        
+    def do_initialize(self, button):
+        self.emit('do-initialize')
 
     def dostop_cb(self, button):
         self.emit('do-stop')
@@ -550,7 +612,7 @@ class UseToolbar(gtk.Toolbar):
         self.doupload.set_tooltip(_('Fullscreen'))
         self.doupload.connect('clicked', self.doupload_cb)
         self.insert(self.doupload, -1)
-        self.doupload.show()
+        self.doupload.hide()
         
         separator = gtk.SeparatorToolItem()
         separator.props.draw = False
@@ -563,7 +625,7 @@ class UseToolbar(gtk.Toolbar):
         self.doslideshow.set_tooltip(_('SlideShow'))
         self.doslideshow.connect('clicked', self.doslideshow_cb)
         self.insert(self.doslideshow, -1)
-        self.doslideshow.show()
+        self.doslideshow.hide()
 
         separator = gtk.SeparatorToolItem()
         separator.props.draw = False

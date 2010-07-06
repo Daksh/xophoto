@@ -120,7 +120,7 @@ class DbAccess():
         return cursor.fetchall()
     
     def get_album_thumbnails(self,album_id,is_journal=False):
-        if not is_journal: #want most recent first, need left join because picture may not exist yet
+        if is_journal: #is_journal: #want most recent first, need left join because picture may not exist yet
             #sql = """select groups.*, picture.* from  groups left join picture  \
                   #where groups.category = ? and groups.jobject_id = picture.jobject_id order by groups.seq desc"""
             sql = """select groups.* from  groups where groups.category = ? order by groups.seq desc"""
@@ -142,6 +142,31 @@ class DbAccess():
         else:
             return -1
         
+    def update_resequence(self,id,seq):
+        """ update the groups record at id, then reassign seq numbers for this album"""
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute('select * from groups where id = ?',(id,))
+        rows = cur.fetchall()
+        if len(rows) != 1:
+            _logger.debug('update_resequence did not fetch id=%s'%id)
+            return
+        album_id = rows[0]['category']
+        cur.execute("update groups set seq = ? where id = ?",(seq,id,))
+        conn.commit()
+        cur.execute ('select * from groups where category = ? order by seq',(album_id,))
+        rows = cur.fetchall()
+        if len(rows) == 0:
+            _logger.debug('no group members for album_id = %s'%album_id)
+            return
+        #need another cursor
+        update_cursor = conn.cursor()
+        num = 0
+        for row in rows:
+            update_cursor.execute("update groups set seq = ? where id = ?",(num,row['id'],))
+            num += 20
+        conn.commit()  
+                   
     def create_picture_record(self,object_id, fn):
         """create a record in picture pointing to unique pictures in the journal.
            Use md5 checksum to test for uniqueness
@@ -204,8 +229,10 @@ class DbAccess():
     def check_in_ds(self,fullpath,size):
         """returns true/false based upon identity of file path and image size"""
         sql = "select * from picture where mount_point = '%s' and orig_size = %s"%(fullpath,size,)
-        self.cur.execute(sql)
-        rows = self.cur.fetchall()
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
         if len(rows)>0: return True
         return False
 
@@ -290,9 +317,29 @@ class DbAccess():
                            (str(album_id),'',str(jobject_id),old_seq + 20))
         self.con.commit()
             
-    def change_sequence(self,rows,subject_index,new_index):
-        pass
+    def delete_image(self, album_id, jobject_id):
+        conn = self.connection()
+        cursor = conn.cursor()
+        cursor.execute("delete from groups where category = ? and jobject_id = ?",\
+                       (str(album_id), str(jobject_id),))
+        conn.commit()
     
+    def delete_all_references_to(self,jobject_id):
+        conn = self.connection()
+        cursor = conn.cursor()
+        try:
+            cursor.execute('begin transaction')
+            cursor.execute("delete from groups where jobject_id = ?",\
+                           (str(jobject_id),))
+            cursor.execute("delete from picture where jobject_id = ?",\
+                           (str(jobject_id),))
+            cursor.execute("delete from data_cache.transforms where jobject_id = ?",\
+                           (str(jobject_id),))
+            conn.commit()
+        except Exception,e:
+            cursor.execute('rollback transaction')
+            _logger.error('error deleting all references for object:%s. Error: ;%s'%(jobject_id,e,))
+
     def table_exists(self,table):
         try:
             sql = 'select  * from %s'%table
