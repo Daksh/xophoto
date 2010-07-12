@@ -88,6 +88,7 @@ class XoPhotoActivity(activity.Activity):
         self.kept_once = False
         self.util = Utilities(self)
         self.db_sanity_check = False
+        gobject.GObject.__init__(self)
         
         #there appears to be an initial save yourself, asynchronous, which
         #  in my write_file closes the database and causes sporatic failures
@@ -162,6 +163,8 @@ class XoPhotoActivity(activity.Activity):
                 self.edit_toolbar_doimport_cb)
         self.edit_toolbar.connect('do-initialize',
                 self.edit_toolbar_doinitialize_cb)
+        self.edit_toolbar.connect('do-rotate',
+                self.edit_toolbar_do_rotate_cb)
         self.edit_toolbar.connect('do-stop',
                 self.__stop_clicked_cb)
         self.edit_toolbar.show()
@@ -171,7 +174,19 @@ class XoPhotoActivity(activity.Activity):
         self.use_toolbar.connect('do-export',
                 self.use_toolbar_doexport_cb)
         self.use_toolbar.connect('do-upload',
-                self.use_toolbar_doupload_cb)
+                self.use_toolbar_do_fullscreen_cb)
+        self.use_toolbar.connect('do-slideshow',
+                self.use_toolbar_doslideshow_cb)
+        self.use_toolbar.connect('do-rewind',
+                self.use_toolbar_do_rewind_cb)
+        self.use_toolbar.connect('do-pause',
+                self.use_toolbar_do_pause_cb)
+        self.use_toolbar.connect('do-play',
+                self.use_toolbar_do_play_cb)
+        self.use_toolbar.connect('do-forward',
+                self.use_toolbar_do_forward_cb)
+        self.use_toolbar.connect('do-media-stop',
+                self.use_toolbar_do_slideshow_stop_cb)
         self.use_toolbar.connect('do-slideshow',
                 self.use_toolbar_doslideshow_cb)
         self.use_toolbar.connect('do-stop',
@@ -305,7 +320,10 @@ class XoPhotoActivity(activity.Activity):
         self.empty_trash_cb(None,gtk.RESPONSE_OK,journal_id)
         self.read_file(None,initialize=True)
 
-    
+    def edit_toolbar_do_rotate_cb(self, view_toolbar):
+        self.game.album_collection.rotate_selected_album_thumbnail_left_90()
+        
+        
     def use_toolbar_doexport_cb(self,use_toolbar):
         if not self.file_tree:
             self.file_tree = FileTree(self.game.db,self)
@@ -325,7 +343,7 @@ class XoPhotoActivity(activity.Activity):
             safe_name = album_name.replace(' ','_')
             new_path = self.non_conflicting(base_path,safe_name)
             _logger.debug('album_id is %s new path:%s'%(album_id,new_path))
-            sql = """select pict.*, grp.* from picture as pict, groups as grp \
+            sql = """select pict.*, grp.* from data_cache.picture as pict, groups as grp \
                   where grp.category = ? and grp.jobject_id = pict.jobject_id"""
             cursor = album_object.db.con.cursor()
             cursor.execute(sql,(album_id,))
@@ -336,6 +354,32 @@ class XoPhotoActivity(activity.Activity):
             exporter = ExportAlbum(rows,self.game.db,new_path)
             exporter.do_export()
 
+    def use_toolbar_do_fullscreen_cb(self,use_toolbar):
+        self.fullscreen()
+    
+    def use_toolbar_doslideshow_cb(self,use_toolbar):
+        self.use_toolbar.slideshow_expose(True)        
+        self.game.view_slides()
+    
+    def use_toolbar_do_rewind_cb(self,use_toolbar):
+        self.game.vs.prev_slide()
+
+    def use_toolbar_do_pause_cb(self,use_toolbar):
+        self.game.vs.pause()
+    
+    def use_toolbar_do_play_cb(self,use_toolbar):
+        self.game.vs.play()
+    
+    def use_toolbar_do_forward_cb(self,use_toolbar):
+        self.game.vs.next_slide()
+    
+    def use_toolbar_do_slideshow_stop_cb(self,use_toolbar):
+        self.game.vs.stop()
+    
+    def __stop_clicked_cb(self, button):
+        self.interactive_close = True
+        self._activity.close()
+    
     def non_conflicting(self,root,basename):
         """
         create a non-conflicting filename by adding '-<number>' to a filename before extension
@@ -355,12 +399,6 @@ class XoPhotoActivity(activity.Activity):
         return os.path.join(root,word+adder+ext)
     
             
-    
-    def use_toolbar_doupload_cb(self,use_toolbar):
-        pass
-    
-    def use_toolbar_doslideshow_cb(self,use_toolbar):
-        pass
     
     def read_file(self, file_path, initialize=False):
         _logger.debug('started read_file %s. make_file flag %s'%(file_path,self.make_jobject))
@@ -454,7 +492,7 @@ class XoPhotoActivity(activity.Activity):
     def write_file(self, file_path):
         
         try:
-            if self.DbAccess_object and not self.interactive_close:
+            if self.DbAccess_object and  self.interactive_close:
                 if self.DbAccess_object.get_error(): return  #dont save a corrupted database
                 self.DbAccess_object.closedb()
                 if self.game and self.game.db:    
@@ -494,11 +532,6 @@ class XoPhotoActivity(activity.Activity):
                 exit()
             _logger.debug('sqlite datbase re-opened successfully')
         
-    def __stop_clicked_cb(self, button):
-        self.interactive_close = True
-        self._activity.close()
-
-
 
 class EditToolbar(gtk.Toolbar):
     __gtype_name__ = 'EditToolbar'
@@ -511,6 +544,9 @@ class EditToolbar(gtk.Toolbar):
                           gobject.TYPE_NONE,
                           ([])),
         'do-initialize': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-rotate': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([])),
         'do-stop': (gobject.SIGNAL_RUN_FIRST,
@@ -530,7 +566,7 @@ class EditToolbar(gtk.Toolbar):
         
         self.delete_comment = ToolButton()
         self.delete_comment.set_stock_id('gtk.stock-delete')
-        self.delete_comment.set_tooltip(_("Re-Inialize the Databass -- for startup testing"))
+        self.delete_comment.set_tooltip(_("Re-Inialize the Databases -- for startup testing"))
         self.delete_comment.connect('clicked',self.do_initialize)
         self.delete_comment.show()
         self.insert(self.delete_comment,-1)
@@ -548,11 +584,19 @@ class EditToolbar(gtk.Toolbar):
         tool_item.add(self.entry)
         self.entry.show()
         self.insert(tool_item, -1)
-        tool_item.hide()
+        tool_item.show()
 
-        self.add_comment = ToolButton('list-add')
-        self.add_comment.set_tooltip(_("Add Annotation"))
-        self.add_comment.hide()
+        separator = gtk.SeparatorToolItem()
+        separator.props.draw = False
+        separator.set_expand(True)
+        self.insert(separator, -1)
+        separator.show()
+
+        self.add_comment = ToolButton()
+        self.add_comment.set_stock_id('gtk-refresh')
+        self.add_comment.set_tooltip(_("Rotate 90 degrees left"))
+        self.add_comment.connect('clicked', self.do_rotate_cb)
+        self.add_comment.show()
         self.insert(self.add_comment,-1)
 
         separator = gtk.SeparatorToolItem()
@@ -567,12 +611,16 @@ class EditToolbar(gtk.Toolbar):
         self.insert(self.stop, -1)
         self.stop.show()
 
+    
     def doimport_cb(self, button):
         self.emit('do-import')
         
     def do_initialize(self, button):
         self.emit('do-initialize')
-
+    
+    def do_rotate_cb(self,button):
+        self.emit('do-rotate')
+        
     def dostop_cb(self, button):
         self.emit('do-stop')
 
@@ -587,6 +635,21 @@ class UseToolbar(gtk.Toolbar):
                           gobject.TYPE_NONE,
                           ([])),
         'do-slideshow': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-rewind': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-pause': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-play': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-media-stop': (gobject.SIGNAL_RUN_FIRST,
+                          gobject.TYPE_NONE,
+                          ([])),
+        'do-forward': (gobject.SIGNAL_RUN_FIRST,
                           gobject.TYPE_NONE,
                           ([])),
         'do-stop': (gobject.SIGNAL_RUN_FIRST,
@@ -607,13 +670,13 @@ class UseToolbar(gtk.Toolbar):
         separator.set_expand(True)
         self.insert(separator, -1)
         separator.show()
-
+        
         self.doupload = ToolButton('view-fullscreen')
         self.doupload.set_tooltip(_('Fullscreen'))
         self.doupload.connect('clicked', self.doupload_cb)
         self.insert(self.doupload, -1)
-        self.doupload.hide()
-        
+        self.doupload.show()
+                
         separator = gtk.SeparatorToolItem()
         separator.props.draw = False
         separator.set_expand(True)
@@ -621,14 +684,60 @@ class UseToolbar(gtk.Toolbar):
         separator.show()
 
         self.doslideshow = ToolButton()
-        self.doslideshow.set_stock_id('gtk-fullscreen')
+        self.doslideshow.set_stock_id('gtk-media-play')
         self.doslideshow.set_tooltip(_('SlideShow'))
         self.doslideshow.connect('clicked', self.doslideshow_cb)
         self.insert(self.doslideshow, -1)
-        self.doslideshow.hide()
+        self.doslideshow.show()
+
+        self.do_rewind = ToolButton()
+        self.do_rewind.set_stock_id('gtk-media-rewind')
+        self.do_rewind.set_tooltip(_('Previous Slide'))
+        self.do_rewind.connect('clicked', self.do_rewind_cb)
+        self.insert(self.do_rewind, -1)
+        self.do_rewind.show()
+        
+        self.do_pause = ToolButton()
+        self.do_pause.set_stock_id('gtk-media-pause')
+        self.do_pause.set_tooltip(_('Pause'))
+        self.do_pause.connect('clicked', self.do_pause_cb)
+        self.insert(self.do_pause, -1)
+        self.do_pause.set_sensitive(False)
+        self.do_pause.show()
+        
+        self.do_run = ToolButton()
+        self.do_run.set_stock_id('gtk-media-play')
+        self.do_run.set_tooltip(_('Play Automatically'))
+        self.do_run.connect('clicked', self.do_run_cb)
+        self.insert(self.do_run, -1)
+        self.do_run.hide()
+
+        self.do_forward = ToolButton()
+        self.do_forward.set_stock_id('gtk-media-forward')
+        self.do_forward.set_tooltip(_('Next Slide'))
+        self.do_forward.connect('clicked', self.do_forward_cb)
+        self.insert(self.do_forward, -1)
+        self.do_forward.show()
+
+        self.do_slideshow_stop = ToolButton()
+        self.do_slideshow_stop.set_stock_id('gtk-media-stop')
+        self.do_slideshow_stop.set_tooltip(_('Stop Slide Show '))
+        self.do_slideshow_stop.connect('clicked', self.do_slideshow_stop_cb)
+        self.insert(self.do_slideshow_stop, -1)
+        self.do_slideshow_stop.set_sensitive(False)
+        self.do_slideshow_stop.show()
+
+        self.entry = gtk.Entry()        
+        self.entry.set_width_chars(2)
+        tool_item = gtk.ToolItem()
+        tool_item.set_expand(False)
+        tool_item.add(self.entry)
+        self.entry.show()
+        self.insert(tool_item, -1)
+        tool_item.show()
 
         separator = gtk.SeparatorToolItem()
-        separator.props.draw = False
+        separator.props.draw = True
         separator.set_expand(True)
         self.insert(separator, -1)
         separator.show()
@@ -638,6 +747,40 @@ class UseToolbar(gtk.Toolbar):
         self.stop.connect('clicked', self.dostop_cb)
         self.insert(self.stop, -1)
         self.stop.show()
+        
+        self.set_running(False)
+        
+    def slideshow_expose(self,expose):
+        if expose:
+            self.do_rewind.show()
+            #self.do_pause.show()
+            #self.do_run.show()
+            self.do_forward.show()
+            self.do_slideshow_stop.show()
+        else:
+            self.do_rewind.hide()
+            #self.do_pause.hide()
+            #self.do_run.hide()
+            self.do_forward.hide()
+            self.do_slideshow_stop.hide()
+            
+    def slideshow_set_break(self,show_break):
+        if show_break:
+            self.doslideshow.set_stock_id('gtk-media-break')
+        else:
+            self.doslideshow.set_stock_id('gtk-media-play')
+    
+    def set_running(self,running):
+        if running:
+            self.doslideshow.set_sensitive(False)
+            self.do_pause.set_sensitive(True)
+            self.do_slideshow_stop.set_sensitive(True)
+        else:
+            self.doslideshow.set_sensitive(True)
+            self.do_pause.set_sensitive(False)
+            self.do_slideshow_stop.set_sensitive(False)
+            
+        
 
     def doexport_cb(self, button):
         self.emit('do-export')
@@ -647,6 +790,21 @@ class UseToolbar(gtk.Toolbar):
 
     def doslideshow_cb(self, button):
         self.emit('do-slideshow')
+
+    def do_rewind_cb(self, button):
+        self.emit('do-rewind')
+
+    def do_pause_cb(self, button):
+        self.emit('do-pause')
+
+    def do_run_cb(self, button):
+        self.emit('do-run')
+
+    def do_forward_cb(self, button):
+        self.emit('do-forward')
+
+    def do_slideshow_stop_cb(self, button):
+        self.emit('do-media-stop')
 
     def dostop_cb(self, button):
         self.emit('do-stop')

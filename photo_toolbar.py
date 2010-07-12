@@ -18,6 +18,7 @@
 
 import gtk
 import gobject
+import os
 #import gconf
 
 from sugar.graphics.toolbox import Toolbox
@@ -65,12 +66,12 @@ class ActivityToolbar(gtk.Toolbar):
             self.add_album.show()
             self.add_album.connect('clicked', self.__add_album_clicked_cb)
             self.insert(self.add_album,-1)
-    
-            self.delete_album = ToolButton('list-remove')
-            self.delete_album.set_tooltip(_("Remove Album"))
-            self.delete_album.connect('clicked', self.__delete_album_clicked_cb)
-            self.delete_album.show()
-            self.insert(self.delete_album,-1)
+            
+            fn = os.path.join(os.getcwd(),'assets','stack_background.png')
+            button = ImageButton()
+            button.set_image(fn)
+            button.connect('clicked', self.__delete_album_clicked_cb)
+            self.insert(button,-1)
 
             self.empty_journal_button = ToolButton()
             self.empty_journal_button.set_stock_id('gtk-cancel')
@@ -211,6 +212,19 @@ class ActivityToolbar(gtk.Toolbar):
     def __max_participants_changed_cb(self, activity, pspec):
         self._update_share()
 
+class ImageButton(ToolButton):
+    def __init__(self):
+        ToolButton.__init__(self)
+        
+    def set_image(self,from_file,tip=None,x=60,y=60):
+            pixbuf = gtk.gdk.pixbuf_new_from_file_at_size(from_file,x,y)
+            self.image = gtk.Image()
+            self.image.set_from_pixbuf(pixbuf)
+            self.image.show()
+            self.set_icon_widget(self.image)
+            self.set_tooltip(_("Remove Album"))
+            self.show()
+        
 class ActivityToolbox(Toolbox):
     """Creates the Toolbox for the Activity
     

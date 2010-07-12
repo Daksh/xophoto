@@ -108,7 +108,7 @@ class DbAccess():
         return mime_list
     
     def get_mime_type(self,jobject_id):
-        self.cur.execute("select * from picture where jobject_id = '%s'"%jobject_id)
+        self.cur.execute("select * from data_cache.picture where jobject_id = '%s'"%jobject_id)
         rows = self.cur.fetchall()
         if len(rows) > 0:
             return rows[0]['mime_type']
@@ -121,12 +121,12 @@ class DbAccess():
     
     def get_album_thumbnails(self,album_id,is_journal=False):
         if is_journal: #is_journal: #want most recent first, need left join because picture may not exist yet
-            #sql = """select groups.*, picture.* from  groups left join picture  \
-                  #where groups.category = ? and groups.jobject_id = picture.jobject_id order by groups.seq desc"""
+            #sql = """select groups.*, data_cache.picture.* from  groups left join data_cache.picture  \
+                  #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq desc"""
             sql = """select groups.* from  groups where groups.category = ? order by groups.seq desc"""
         else:
-            #sql = """select groups.*, picture.* from groups left join picture  \
-                  #where groups.category = ? and groups.jobject_id = picture.jobject_id order by groups.seq """
+            #sql = """select groups.*, data_cache.picture.* from groups left join data_cache.picture  \
+                  #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq """
             sql = "select * from groups where category = ? order by seq"
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
@@ -179,20 +179,22 @@ class DbAccess():
         
         #we'll calculate the md5, check it against any pictures, and store it away
         md5_hash = Md5Tools().md5sum(fn)
-        sql = "select * from picture where md5_sum = '%s'"%(md5_hash,)
-        self.cur.execute(sql)
-        rows_md5 = self.cur.fetchall()
+        sql = "select * from data_cache.picture where md5_sum = '%s'"%(md5_hash,)
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows_md5 = cur.fetchall()
         if len(rows_md5) >0:
             pass
             _logger.debug('duplicate picture, ojbect_id %s path: %s'%(object_id,fn,))        
-        sql = "select * from picture where jobject_id = '%s'"%(object_id,)
-        self.cur.execute(sql)
-        rows = self.cur.fetchall()
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(object_id,)
+        cur.execute(sql)
+        rows = cur.fetchall()
         _logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
         #the object_id is supposed to be unique, so add only new object_id's
         info = os.stat(fn)
         if len(rows) == 0:
-            sql = """insert into picture \
+            sql = """insert into data_cache.picture \
                   (in_ds, mount_point, orig_size, create_date,jobject_id, md5_sum, duplicate) \
                   values (%s,'%s',%s,'%s','%s','%s',%s)""" % \
                   (1, fn, info.st_size, info.st_ctime, object_id, md5_hash,len(rows_md5),)
@@ -202,7 +204,7 @@ class DbAccess():
             _logger.debug('%s seconds to insert'%(time.clock()-start))
             return 1
         elif len(rows) == 1:
-            sql = """update picture set in_ds = ?, mount_point = ?, orig_size = ?, \
+            sql = """update data_cache.picture set in_ds = ?, mount_point = ?, orig_size = ?, \
                   create_date = ?, md5_sum = ?, duplicate = ?"""
             cursor = self.connection().cursor()
             cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,len(rows_md5)))             
@@ -211,24 +213,24 @@ class DbAccess():
         return 0
     
     def put_ds_into_picture(self,jobject_id):
-        self.cur.execute("select * from picture where jobject_id = ?",(jobject_id,))
+        self.cur.execute("select * from data_cache.picture where jobject_id = ?",(jobject_id,))
         rows = self.cur.fetchall()
         #_logger.debug('rowcount %s object_id %s'%(len(rows),object_id))
         #the object_id is supposed to be unique, so add only new object_id's
         if len(rows) == 0:
             cursor = self.connection().cursor()
-            cursor.execute('insert into picture (jobject_id) values (?)',(str(jobject_id),))              
+            cursor.execute('insert into data_cache.picture (jobject_id) values (?)',(str(jobject_id),))              
             self.con.commit()
     
     def clear_in_ds(self):
-        self.connection().execute('update picture set in_ds = 0')
+        self.connection().execute('update data_cache.picture set in_ds = 0')
     
     def delete_not_in_ds(self):
-        self.connection().execute('delete from picture where in_ds = 0')
+        self.connection().execute('delete from data_cache.picture where in_ds = 0')
 
     def check_in_ds(self,fullpath,size):
         """returns true/false based upon identity of file path and image size"""
-        sql = "select * from picture where mount_point = '%s' and orig_size = %s"%(fullpath,size,)
+        sql = "select * from data_cache.picture where mount_point = '%s' and orig_size = %s"%(fullpath,size,)
         conn = self.connection()
         cur = conn.cursor()
         cur.execute(sql)
@@ -324,6 +326,32 @@ class DbAccess():
                        (str(album_id), str(jobject_id),))
         conn.commit()
     
+    def write_transform(self,jobject_id,w,h,x_thumb,y_thumb,image_blob,rec_id = None,transform_type='thumb',rotate_left=1,seq=0):
+        if image_blob:
+            thumbstr = pygame.image.tostring(image_blob,'RGB')
+        else:
+            thumbstr = ''
+        thumb_binary = sqlite3.Binary(thumbstr)
+        conn = self.connection()
+        cursor = conn.cursor()
+        try:
+            if rec_id:
+                cursor.execute("""update data_cache.transforms set thumb = ?, scaled_x = ?, scaled_y = ?, rotate_left = ?
+                               where id = ?""",(thumb_binary,x_thumb,y_thumb,rotate_left,rec_id))
+            else:
+                cursor.execute("""insert into data_cache.transforms (jobject_id,original_x,original_y,scaled_x,scaled_y,thumb,transform_type,seq)
+values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transform_type,seq))
+        except sqlite3.Error,e:
+            _logger.debug('write thumbnail error %s'%e)
+            return None
+        conn.commit()
+        
+    def get_transforms(self,jobject_id):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from data_cache.transforms where jobject_id = ?',(jobject_id,))
+        rows = cursor.fetchall()
+        return rows
+
     def delete_all_references_to(self,jobject_id):
         conn = self.connection()
         cursor = conn.cursor()
@@ -331,7 +359,7 @@ class DbAccess():
             cursor.execute('begin transaction')
             cursor.execute("delete from groups where jobject_id = ?",\
                            (str(jobject_id),))
-            cursor.execute("delete from picture where jobject_id = ?",\
+            cursor.execute("delete from data_cache.picture where jobject_id = ?",\
                            (str(jobject_id),))
             cursor.execute("delete from data_cache.transforms where jobject_id = ?",\
                            (str(jobject_id),))
@@ -479,11 +507,11 @@ class Md5Tools():
     
 if __name__ == '__main__':
     db = DbAccess('xophoto.sqlite')
-    rows,cur = db.dbdo('select * from picture')
+    rows,cur = db.dbdo('select * from data_cache.picture')
     for row in rows:
         print row['jobject_id']
     print('index of jobject_id: %s'%db.row_index('duplicate','picture'))
-    print('number of records %s'%db.numberofrows('picture'))
-    print('fields %r'%db.fieldlist('picture'))
+    print('number of records %s'%db.numberofrows('data_cache.picture'))
+    print('fields %r'%db.fieldlist('data_cache.picture'))
     print ('tables %r'%db.tablelist())
     

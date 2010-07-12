@@ -91,8 +91,8 @@ class Datastore_SQLite():
         """scans the journal for pictures that are not in database, records jobject_id if found in
         table groups with the journal id in category. Can be faster because we don't have to fetch file itself.
         """
-        mime_list = self.db.get_mime_list()
-        (results,count) = datastore.find({'mime_type':['image/jpg','image/png','image/jpeg','image/gif'],})
+        mime_list = ['image/jpg','image/png','image/jpeg','image/gif',]
+        (results,count) = datastore.find({'mime_type':mime_list})
         _logger.debug('Journal/datastore entries found:%s'%count)
         added = 0
         a_row_found = False

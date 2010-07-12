@@ -53,6 +53,7 @@ from dbphoto import *
 from sources import *
 import ezscroll
 from ezscroll.ezscroll import  ScrollBar
+from sinks import *
 
 
 #pick up activity globals
@@ -65,6 +66,7 @@ in_db_wait = False
 in_drag = False
 screen_h = 0
 screen_w = 0
+screen = None
 
 #thickness of scroll bar
 thick = 15
@@ -151,19 +153,29 @@ class OneThumbnail():
             self.surface.fill(background_color)
             self.scaled = self.scale_image(id,size_x,size_y)
             if not self.scaled: return
-            if self.aspect >= 1.0:
-                self.subsurface_x = self.border
-                self.subsurface_y = (size_y - self.y_thumb) // 2
-            else:
-                self.subsurface_y = self.border
-                self.subsurface_x = (size_x - self.x_thumb) // 2
-            self.thumbnail = self.surface.subsurface([self.subsurface_x,self.subsurface_y,self.x_thumb,self.y_thumb])
+            self.thumbnail = self.set_thumbnail_rect_on_surface(self.scaled,self.surface)
         if selected:
             self.select()
         else:
             self.unselect()
         #_logger.debug('image painted at %s,%s'%(pos_x,pos_y,))
         
+    def set_thumbnail_rect_on_surface(self,thumb_image,target_surface):
+        thumb_rect = thumb_image.get_rect()
+        w,h = thumb_rect.size
+        _logger.debug('set_thumbnail_rec_on_surface:(%s,%s)'%(w,h,))
+        size_x,size_y = target_surface.get_size()
+        if h <= 0: return
+        aspect = float(w)/h
+        if aspect >= 1.0:
+            self.subsurface_x = self.border
+            self.subsurface_y = (size_y - h) // 2
+        else:
+            self.subsurface_y = self.border
+            self.subsurface_x = (size_x - w) // 2
+        thumb_subsurface = self.surface.subsurface((self.subsurface_x,self.subsurface_y,w,h))
+        return thumb_subsurface
+    
     def unselect(self):
         if not self.thumbnail: return self
         self.surface.fill(background_color)
@@ -244,22 +256,66 @@ class OneThumbnail():
         _logger.debug('%f seconds to create the thumbnail'%(time.clock()-start))
         start = time.clock()
         if self.save_to_db:
+            
             #write the transform to the database for speedup next time
-            thumbstr = pygame.image.tostring(ret,'RGB')
-            conn = self.db.get_connection()
-            cursor = conn.cursor()
-            thumb_binary = sqlite3.Binary(thumbstr)
-            try:
-                cursor.execute("insert into data_cache.transforms (jobject_id,original_x,original_y,scaled_x,scaled_y,thumb) values (?,?,?,?,?,?)",\
-                           (id,w,h,self.x_thumb,self.y_thumb,thumb_binary,))
-            except sqlite3.Error,e:
-                _logger.debug('write thumbnail error %s'%e)
-                return None
-            self.db.commit()
+            self.db.write_transform(id,w,h,self.x_thumb,self.y_thumb,ret)            
             self.from_database = False
             _logger.debug(' and %f seconds to write to database'%(time.clock()-start))
         return ret
     
+    def rotate_thumbnail_left_90(self,jobject_id,num=1):
+        """strategy for thumbnails: keep track of all the transformations.
+            let the thumbnail reflect the sum of all the transformations. But
+            apply them on the fly to the full size renditions, and to the uploaded
+            version  (still need to satisfy myself that the metadata is the pictures
+            is preserved).
+        """
+        _logger.debug('entered rotate_thumbnail_left_90')
+        if not jobject_id: return
+        start = time.clock()
+        rows = self.db.get_transforms(jobject_id)
+        surf = None
+        rotate_type_row_id = None
+        row_id = None
+        for row in rows:
+            if row['transform_type'] == 'rotate':
+                if row['rotate_left']:
+                    num = row['rotate_left']
+                num += 1
+                rotate_type_row_id = row['id']
+                _logger.debug('number of 90 degree rotations:%s'%num)
+            elif row['transform_type'] == 'thumb':
+                #need the dimensions used to blobify
+                scaled_x = row['scaled_x']
+                scaled_y = row['scaled_y']
+                w = row['original_x']
+                h = row['original_y']
+                row_id = row['id']
+                blob =row['thumb']
+                surf = pygame.image.frombuffer(blob,(scaled_x,scaled_y),'RGB')
+        if not surf:
+            _logger.error('failed to find transform record')
+            return None
+        while num > 4: num -= 4
+        orig_scaled_x = scaled_x
+        orig_scaled_y = scaled_y
+        rotated_surf = pygame.transform.rotate(surf,90)
+        scaled_x,scaled_y = rotated_surf.get_size()
+        _logger.debug('originals(:%s,%s) rotated:(%s,%s)'%(orig_scaled_x,orig_scaled_y,scaled_x,scaled_y,))
+        self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,rotated_surf,rec_id=row_id)
+        
+        #then record the amount of rotation in a transform record of type 'rotate'
+        if rotate_type_row_id:
+            self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,rotated_surf,
+                                    rec_id=rotate_type_row_id,transform_type='rotate',rotate_left=num)
+        else:
+            self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,None,transform_type='rotate',rotate_left=num)
+            
+        _logger.debug('%f seconds to rotate the thumbnail'%(time.clock()-start))
+        self.scaled = None  #force a reload from the database
+        self.paint_thumbnail(self.target,self.x,self.y,self.size_x,self.size_y,True)
+        return rotated_surf
+        
     def position(self,x,y):
         self.x = x
         self.y = y
@@ -336,11 +392,11 @@ class OneAlbum():
         start_time = time.clock()
         for i in range(num_pict):
             self.pict_dict[i] = OneThumbnail(self.rows,self.db,self.thumbnail_world,i)
-            if not self.last_selected: self.last_selected = self.pict_dict[i]
             row = i // self.pict_per_row
             pos_x = (i % self.pict_per_row) * self.xy_size
             pos_y = (row  - self.origin_row) * self.xy_size
             selected = self.thumb_index == i
+            if selected: self.last_selected = self.pict_dict[i]
             
             #do the heavy lifting
             self.pict_dict[i].paint_thumbnail(self.thumbnail_world,pos_x,pos_y,self.xy_size,self.xy_size,selected)
@@ -515,6 +571,12 @@ class OneAlbum():
         except:
             return None
 
+    def get_selected_jobject_id(self):
+        if self.rows and self.thumb_index and self.thumb_index < len(self.rows):
+            return self.rows[self.thumb_index]['jobject_id']
+        return None
+        
+
     def toggle(self,x,y):
         if not self.large_displayed:
             self.large_displayed = True
@@ -529,12 +591,9 @@ class OneAlbum():
             self.num_rows = self.num_rows_save
             self.thumbnail_world.fill(background_color)
         #following call paints the thumnails
-        self.paint()
-
+        self.paint()    
 
     def one_large(self):
-        #clear the pictures
-        #self.thumbnail_world.fill(background_color)
         #figure out what size to paint
         y_size = screen_h - self.xy_size
         x_pos =  (screen_w - album_column_width - y_size) / 2
@@ -652,7 +711,7 @@ class DisplayAlbums():
     """Shows the photo albums on left side of main screen, responds to clicks, drag/drop events"""
     journal_id =  '20100521T10:42'
     trash_id = '20100521T11:40'
-    predefined_albums = [(journal_id,_('Journal')),(trash_id,_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
+    predefined_albums = [(journal_id,_('All Pictures')),(trash_id,_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
     def __init__(self,db,activity):
         self.db = db  #pointer to the open database
         self._activity = activity #pointer to the top level activity
@@ -692,7 +751,7 @@ class DisplayAlbums():
             self.db.commit()
             """this needs to be done whenever new pictures are added to journal so not now
             #then put the journal picutres into the journal album
-            rows, cur = self.db.dbdo('select * from picture')
+            rows, cur = self.db.dbdo('select * from data_cache.picture')
             i = 0
             conn = self.db.get_connection()
             cursor = conn.cursor()
@@ -897,6 +956,7 @@ class DisplayAlbums():
         #save off the unique id(timestamp)as a continuing target
         self.db.set_last_album(self.accumulation_target)
         self.paint_albums()
+        self.album_index = self.get_index_of_album_id(self.accumulation_target)
 
     def delete_album(self,album_id):
         _logger.debug('delete album action routine. deleting id(timestamp):%s'%album_id)
@@ -922,6 +982,11 @@ class DisplayAlbums():
     def get_current_album_identifier(self):
         return   str(self.album_rows[self.album_index]['subcategory'])
     
+    def get_index_of_album_id(self,album_id):
+        self.refresh_album_rows()
+        for index in range(len(self.album_rows)):            
+            if str(self.album_rows[index]['jobject_id']) == album_id: return index
+        return -1
     def get_album_id_at_index(self,index):
         if index >= len(self.album_rows):
             return ''
@@ -946,7 +1011,25 @@ class DisplayAlbums():
         self.start_grab_x = x
         self.start_grab_y = y
         #change the cursor some way
-        self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.TOP_LEFT_CORNER))
+        """
+        fn = os.path.join(os.getcwd(),'assets','closed_hand.xbm')
+        patfn = fn
+        fd = open(fn,'r')
+        bitstring = fd.read()
+        bitpattern = gtk.gdk.bitmap_create_from_data(None,bitstring,48,48)
+
+        fn = os.path.join(os.getcwd(),'assets','closed_hand_mask.xbm')
+        maskfn = fn
+        fd = open(fn,'r')
+        maskstring = fd.read()
+        bitmask = gtk.gdk.bitmap_create_from_data(None,maskstring,48,48)
+        
+        a, b, c, d = pygame.cursors.load_xbm(patfn,maskfn)
+        #pygame.mouse.set_cursor(a,b,c,d)
+        
+        #self._activity.window.set_cursor(gtk.gdk.Cursor(pattern,mask,gtk.gdk.Color(255,255,255),gtk.gdk.Color(0,0,0),24,24))
+        """
+        self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.DOTBOX))
             
     def drop_image(self, start_x,start_y,drop_x, drop_y):
         self._activity.window.set_cursor(None)
@@ -997,7 +1080,13 @@ class DisplayAlbums():
             _logger.debug('insert after %s this image at index:%s'%(thumb_index,start_index,))
             self.album_objects[self.selected_album_id].insert_after(thumb_index,start_index)
             
-    
+    def rotate_selected_album_thumbnail_left_90(self):
+        album_object = self.album_objects.get(self.selected_album_id)
+        if album_object:
+            thumb_object = album_object.pict_dict.get(album_object.thumb_index)
+        if thumb_object:
+            thumb_object.rotate_thumbnail_left_90(album_object.get_selected_jobject_id())
+            pygame.display.flip()
         
     #####################            ALERT ROUTINES   ##################################
 class Utilities():
@@ -1079,6 +1168,7 @@ class Application():
         self.file_tree = None
         self.util = Utilities(self._activity)
         self.album_collection = None
+        self.vs = None
     
     def first_run_setup(self):        
         #scan the datastore and add new images as required
@@ -1097,7 +1187,7 @@ class Application():
             
     def pygame_display(self):
         pygame.display.flip()
-            
+    """        
     def show_progress(self,button,id):
         self.pa = ProgressAlert()
         self._activity.add_alert(self.pa)
@@ -1105,7 +1195,7 @@ class Application():
        
     def _response_cb(self,alert,response):
         self._activity.remove_alert(self.pa)
-
+    """
     def do_startup(self):
             start = time.clock()
             
@@ -1153,6 +1243,28 @@ class Application():
             start = time.clock()
             self.album_collection.display_journal()
             _logger.debug('took %s to display journal'%(time.clock()-start))
+
+    def view_slides(self):
+        #get the album rows for viewing
+        self.pygame_focus()
+        album_id = self.album_collection.selected_album_id
+        album_object = self.album_collection.album_objects.get(album_id,None)
+        if album_object:
+            if self.vs:
+                self._activity.use_toolbar.slideshow_set_break(True)
+                return
+            else:
+                self.vs = ViewSlides(self,album_object,self.db)
+                self._activity.use_toolbar.slideshow_set_break(False)
+                self.vs.run()
+        self.album_collection.paint_albums()
+        album_id = self.album_collection.selected_album_id
+        thumb_surf_obj = self.album_collection.album_objects.get(album_id,None)
+        screen.blit(thumb_surf_obj.thumbnail_surface,(album_column_width,0))
+        pygame.display.flip()
+            
+    def pygame_focus(self):
+        self._activity.window.focus()
 
     def run(self):
         global screen
@@ -1236,6 +1348,12 @@ class Application():
                     
                     elif event.type == pygame.VIDEORESIZE:
                         pygame.display.set_mode(event.size, pygame.RESIZABLE)
+                        screen = pygame.display.get_surface()
+                        info = pygame.display.Info()
+                        screen_w = info.current_w
+                        screen_h = info.current_h
+                        _logger.debug('resized screen sizes w:%s h:%s '%(screen_w,screen_h,))
+                        self.do_startup()
 
                     if x < album_column_width:
                         self.album_collection.sb.update(event)
@@ -1273,6 +1391,7 @@ class Application():
             #record the initial position
             self.drag_start_x,self.drag_start_y = x,y
         elif x < album_column_width -thick:
+            #self._activity._pygamecanvas._socket.window.set_cursor(None)
             self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.PLUS))
             
     
