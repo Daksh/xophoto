@@ -153,7 +153,7 @@ class OneThumbnail():
     def set_thumbnail_rect_on_surface(self,thumb_image,target_surface):
         thumb_rect = thumb_image.get_rect()
         w,h = thumb_rect.size
-        _logger.debug('set_thumbnail_rec_on_surface:(%s,%s)'%(w,h,))
+        #_logger.debug('set_thumbnail_rec_on_surface:(%s,%s)'%(w,h,))
         size_x,size_y = target_surface.get_size()
         if h <= 0: return
         aspect = float(w)/h
@@ -534,6 +534,7 @@ class OneAlbum():
 
     def insert_after(self,after_index, thumbnail_index):
         #get the seq of the row[after_index]
+        if after_index < 0 or after_index >= len(self.rows): return
         if after_index < 0:
             adder = -1
         else:
@@ -552,6 +553,7 @@ class OneAlbum():
         thumb_index = int(((y + sb_y) // self.xy_size) * self.pict_per_row + \
             (x - album_column_width) // self.xy_size)
         _logger.debug('click index:%s'%thumb_index)
+        if thumb_index < 0: thumb_index = 0
         if thumb_index < len(self.rows):
             self.thumb_index = thumb_index
         else:
@@ -561,6 +563,7 @@ class OneAlbum():
         return self.thumb_index
             
     def get_jobject_id_at_xy(self,x,y):
+        """returns the thumbnail jobject_id at x,y"""
         #x and y are relative to thumbnail_surface, figure out first mapping to the world
         if self.sb:
             (sb_x,sb_y) = self.sb.get_scrolled()
@@ -722,6 +725,7 @@ class DisplayAlbums():
     def __init__(self,db,activity):
         self.db = db  #pointer to the open database
         self._activity = activity #pointer to the top level activity
+        self.album_sb = None
 
         #why both _rows and _objects?
         # rows is returned from a select in seq order
@@ -822,7 +826,7 @@ class DisplayAlbums():
         scrollRect = pygame.Rect(album_column_width - thick, 0, thick, screen_h)
         excludes = ((0, 0), (album_column_width-thick,screen_h)) # rect where sb update is a pass
         group = pygame.sprite.RenderPlain()    
-        self.sb = ScrollBar(
+        self.album_sb = ScrollBar(
             group,
             world.get_height(),
             scrollRect,
@@ -837,8 +841,8 @@ class DisplayAlbums():
             (200,210,225),
             (240,240,250),
             (0,55,100))    
-        self.sb.draw(self.album_surface)
-        self.album_surface.blit(world, (0,0),(self.sb.get_scrolled(),(album_column_width-thick,screen_h)))  
+        self.album_sb.draw(self.album_surface)
+        self.album_surface.blit(world, (0,0),(self.album_sb.get_scrolled(),(album_column_width-thick,screen_h)))  
         return self.album_surface    
     
     def paint_albums(self):
@@ -849,6 +853,10 @@ class DisplayAlbums():
             self.clear_albums()
             self.world = pygame.Surface((album_column_width, 8 * self.album_height)) #len(self.album_rows) * self.album_height))
             self.world.fill(album_background_color)
+            
+            #if this is first time through, init the scroll bar system
+            if not self.album_sb:
+                surf = self.album_panel(self.world)
 
             num_albums = len(self.album_rows)
             for row_index in range(num_albums ):
@@ -858,8 +866,11 @@ class DisplayAlbums():
                 album_image = album_object.one_album_image(self.album_rows, row_index, selected)
                 self.world.blit(album_image,(0,screen_row * self.album_height))
                 screen_row += 1
-            surf = self.album_panel(self.world)
-            screen.blit(surf, (0,0))
+            self.album_sb.dirty = True    
+            self.album_sb.draw(self.album_surface)
+            self.album_surface.blit(self.world, (0,0),(self.album_sb.get_scrolled(),\
+                                                  (album_column_width-thick,screen_h)))  
+            screen.blit(self.album_surface, (0,0))
             pygame.display.flip()
             
     def refresh_album_rows(self):
@@ -873,8 +884,9 @@ class DisplayAlbums():
     def click(self,x,y):
         """select the pointed to album"""
         #get the y index
-        sb_x,sb_y = self.sb.get_scrolled()
+        sb_x,sb_y = self.album_sb.get_scrolled()
         y_index = (y + sb_y) // self.album_height 
+        _logger.debug('y:%s sb_y:%s Index:%s in_click'%(y,sb_y,y_index,))
         self.album_index = int(y_index)
         self.refresh_album_rows()
         if  self.album_index >= len(self.album_rows) :
@@ -890,12 +902,13 @@ class DisplayAlbums():
             album_timestamp = journal_id #the journal
             _logger.debug('exception fetching thumbnails %s'%e)
             return
-        self.selected_album_id = album_title
+        self.selected_album_id = album_timestamp
         if album_timestamp == trash_id:
             self._activity.activity_toolbar.empty_journal_button.show()
         else:
             self._activity.activity_toolbar.empty_journal_button.hide()           
-        _logger.debug('now display the thumbnails with the album identifier %s'%album_timestamp)
+        _logger.debug('now display album at index %s thumbnails with the album identifier %s'%
+                      (self.album_index,album_timestamp))
         change_name = True
         for id,name in  self.predefined_albums:
             if album_timestamp == id:
@@ -999,6 +1012,7 @@ class DisplayAlbums():
         for index in range(len(self.album_rows)):            
             if str(self.album_rows[index]['jobject_id']) == album_id: return index
         return -1
+    
     def get_album_id_at_index(self,index):
         if index >= len(self.album_rows):
             return ''
@@ -1009,8 +1023,11 @@ class DisplayAlbums():
     
     def get_album_index_at_xy(self,x,y):
         if x > album_column_width - thick: return None
-        index = y // self.album_height
-        return int(index)
+        #get the y index
+        sb_x,sb_y = self.album_sb.get_scrolled()
+        y_index = (y + sb_y) // self.album_height 
+        index = int(y_index)
+        return index
             
     def add_to_album_at_xy(self,x,y):
         jobject_id = self.album_objects[self.selected_album_id].get_jobject_id_at_xy(x,y)
@@ -1066,6 +1083,7 @@ class DisplayAlbums():
             _logger.debug('index:%s length of rows:%s  jobject_id %s'%(index,len(self.album_rows),jobject_id,))
             if index > len(self.album_rows)-1:
                 self.create_new_album(self.default_name)
+                self.db.add_image_to_album(self.accumulation_target, jobject_id)
                 self.album_objects[self.accumulation_target].set_top_image(jobject_id)
             else:
                 self.accumulation_target = self.album_rows[index]['subcategory']
@@ -1077,7 +1095,7 @@ class DisplayAlbums():
             
         #the drop was on thumbnail side of screen, this is a reorder request
         else:
-            #map from thumbnail_surface to thumbnail_world, splitting each image vertically in middle
+            #map from thumbnail_surface to thumbnail_world
             start_index = self.album_objects[self.selected_album_id].click(start_x, start_y)
             if self.album_objects[self.selected_album_id].sb:
                 (sb_x,sb_y) = self.album_objects[self.selected_album_id].sb.get_scrolled()
@@ -1086,7 +1104,7 @@ class DisplayAlbums():
             xy_size = self.album_objects[self.selected_album_id].xy_size
             pict_per_row = self.album_objects[self.selected_album_id].pict_per_row
             thumb_index = int(((drop_y + sb_y) // xy_size) * pict_per_row + \
-                math.floor(drop_x - album_column_width-(xy_size//2)) // xy_size)
+                math.floor(drop_x - album_column_width) // xy_size)
             if thumb_index > len(self.album_objects[self.selected_album_id].rows) - 1:
                 thumb_index =len(self.album_objects[self.selected_album_id].rows) - 1
             _logger.debug('insert after %s this image at index:%s'%(thumb_index,start_index,))
@@ -1177,6 +1195,7 @@ class Application():
     db = None
     def __init__(self, activity):
         self._activity = activity
+        #self._activity.window.connect('activate-focus',self.expose_event_cb)
         self.in_grab = False
         self.file_tree = None
         self.util = Utilities(self._activity)
@@ -1198,7 +1217,16 @@ class Application():
         if self.album_collection:
             self.album_collection.set_name(name)
             
-    def pygame_display(self):
+    def expose_event_cb(self,widget):
+        self.pygame_repaint()
+            
+    def pygame_repaint(self):
+        _logger.debug('pugame_repaint')
+        if not self.album_collection: return
+        album_id = self.album_collection.selected_album_id
+        album_object = self.album_collection.album_objects.get(album_id,None)
+        if not album_object: return
+        album_object.repaint_whole_screen()
         pygame.display.flip()
     """        
     def show_progress(self,button,id):
@@ -1302,6 +1330,7 @@ class Application():
             running = True
             x = 0 #initialize in case there is no mouse event
             while running:
+                #pygame.display.flip()
                 # Pump GTK messages.
                 while gtk.events_pending():
                     gtk.main_iteration()
@@ -1359,28 +1388,28 @@ class Application():
                         _logger.debug('resized screen sizes w:%s h:%s '%(screen_w,screen_h,))
                         self.do_startup()
 
-                    if x < album_column_width:
-                        self.album_collection.sb.update(event)
-                        changes = self.album_collection.sb.draw(self.album_collection.album_surface)
-                        if len(changes) > 0:
-                            changes.append(self.album_collection.album_surface.blit(self.album_collection.world, (0,0),
-                                  (self.album_collection.sb.get_scrolled(),(album_column_width-thick,screen_h))))
-                            screen.blit(self.album_collection.album_surface,(0,0))
-                            pygame.display.update(changes)
-                    else:
-                        album_id = self.album_collection.selected_album_id
-                        thumb_surf_obj = self.album_collection.album_objects.get(album_id,None)
-                        if thumb_surf_obj and thumb_surf_obj.sb:
-                            thumb_surf_obj.sb.update(event)
-                            thumb_changes =  thumb_surf_obj.sb.draw(thumb_surf_obj.thumbnail_surface)
-                            if len(thumb_changes) > 0:
-                                thumb_surf_obj.thumbnail_surface.blit(thumb_surf_obj.thumbnail_world,
-                                                    (0,0),(thumb_surf_obj.sb.get_scrolled(),
-                                                    (screen_w-album_column_width, screen_h)))
-                                thumb_changes.append(pygame.Rect(album_column_width,0,screen_w-album_column_width,screen_h))                                                
-                                screen.blit(thumb_surf_obj.thumbnail_surface,(album_column_width,0))
-                                pygame.display.update(thumb_changes)
-                        
+                    #if x < album_column_width:
+                    self.album_collection.album_sb.update(event)
+                    changes = self.album_collection.album_sb.draw(self.album_collection.album_surface)
+                    if len(changes) > 0:
+                        changes.append(self.album_collection.album_surface.blit(self.album_collection.world, (0,0),
+                              (self.album_collection.album_sb.get_scrolled(),(album_column_width-thick,screen_h))))
+                        screen.blit(self.album_collection.album_surface,(0,0))
+                        pygame.display.update(changes)
+                    #else:
+                    album_id = self.album_collection.selected_album_id
+                    thumb_surf_obj = self.album_collection.album_objects.get(album_id,None)
+                    if thumb_surf_obj and thumb_surf_obj.sb:
+                        thumb_surf_obj.sb.update(event)
+                        thumb_changes =  thumb_surf_obj.sb.draw(thumb_surf_obj.thumbnail_surface)
+                        if len(thumb_changes) > 0:
+                            thumb_surf_obj.thumbnail_surface.blit(thumb_surf_obj.thumbnail_world,
+                                                (0,0),(thumb_surf_obj.sb.get_scrolled(),
+                                                (screen_w-album_column_width, screen_h)))
+                            thumb_changes.append(pygame.Rect(album_column_width,0,screen_w-album_column_width,screen_h))                                                
+                            screen.blit(thumb_surf_obj.thumbnail_surface,(album_column_width,0))
+                            pygame.display.update(thumb_changes)
+                    
                 
     def drag(self,event):
         global in_drag
@@ -1394,9 +1423,11 @@ class Application():
             in_drag = True
             #record the initial position
             self.drag_start_x,self.drag_start_y = x,y
-        elif x < album_column_width -thick:
+        elif x < album_column_width -thick and not self.album_collection.album_sb.scrolling:
             #self._activity._pygamecanvas._socket.window.set_cursor(None)
             self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.PLUS))
+        elif x > album_column_width:
+            self._activity.window.set_cursor(None)
             
     
     def drop(self,event):
@@ -1406,6 +1437,13 @@ class Application():
         if max(abs(self.drag_start_x - x), abs(self.drag_start_y - y)) < self.drag_threshold:
             in_drag = False
             return
+
+        #ignore the drops that are really scroll events
+        right_side = self.album_collection.album_objects\
+                    [self.album_collection.selected_album_id]
+        if self.album_collection.album_sb.scrolling or right_side.sb.scrolling:
+            return
+        
         print('drop at %s,%s'%(x,y,))
         if in_drag and self.last_l:
             self.album_collection.drop_image(self.drag_start_x,self.drag_start_y,x,y)
@@ -1424,8 +1462,8 @@ class Application():
             l,m,r = pygame.mouse.get_pressed()
             print('mouse single click')
             if x < album_column_width -thick:
-                scroll_x,scroll_y = self.album_collection.sb.get_scrolled()
-                rtn_val = self.album_collection.click(x,y + scroll_y)
+                #scroll_x,scroll_y = self.album_collection.album_sb.get_scrolled()
+                rtn_val = self.album_collection.click(x,y)
                 if not rtn_val:
                     #create a new album
                     pass
@@ -1447,7 +1485,7 @@ class Application():
     def mouse_timer_running(self):
         global in_click_delay
         if not in_click_delay:
-            Timer(0.5, self.end_delay, ()).start()
+            Timer(0.3, self.end_delay, ()).start()
             in_click_delay = True
             return False
         return True

@@ -405,6 +405,8 @@ values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transfo
             cursor.execute('begin transaction')
             cursor.execute("delete from groups where jobject_id = ?",\
                            (str(jobject_id),))
+            cursor.execute("delete from groups where subcategory = ?",\
+                           (str(jobject_id),))
             cursor.execute("delete from data_cache.picture where jobject_id = ?",\
                            (str(jobject_id),))
             cursor.execute("delete from data_cache.transforms where jobject_id = ?",\

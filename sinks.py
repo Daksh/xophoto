@@ -83,8 +83,9 @@ class ViewSlides():
         if not jobject_id: return
 
         paint = self.transform_scale_slide(jobject_id)
-        display.screen.blit(paint,(0,0))
-        pygame.display.flip()
+        if  paint:
+            display.screen.blit(paint,(0,0))
+            pygame.display.flip()
         
         self.index += 1
         if self.index == len(self.rows):
@@ -117,7 +118,7 @@ class ViewSlides():
             
         #get the original image from the journal
         surf = self.get_picture(jobject_id)
-        if not surf: return
+        if not surf: return None
         display.screen.fill((0,0,0))
         if number_left_90s > 0:
             rotated_surf = pygame.transform.rotate(surf,number_left_90s * 90)
@@ -165,6 +166,7 @@ class ViewSlides():
                       (screen_w,screen_h,w,h,x,y,))
         paint = pygame.transform.scale(source,(x,y))
         image_rect = paint.get_rect()
+
         if screen_aspect < aspect: #sceen is wider than image
             image_rect.midleft = target_rect.midleft
         else:
@@ -225,23 +227,44 @@ class ViewSlides():
 
 class ExportAlbum():
     
-    def __init__(self,rows,db,path):
+    def __init__(self,parent,rows,db,base_path,path):
         """inputs =rows is an array or records from table xophoto.sqlite.groups
                   =db is a class object which has functions for reading database
-                  =sources is a class object which has functions for getting data
                   =path is writeable path indicating location for new exported images
         """
+        self._parent = parent
         self.rows = rows
         self.db = db
         self.sources = Datastore_SQLite(db)
+        self.base_path = base_path
         self.path = path
+        self.album = str(path.split('/')[-1])
         
     def do_export(self):
+        
         if not os.path.isdir(self.path):
             try:
                 os.makedirs(self.path)
             except:
-                raise PhotoException('cannot create directory(s) at %s'%self.target)
+                pass
+                #fall through and use the alert in exception handler there
+                #raise PhotoException('cannot create directory(s) at %s'%self.target)
+        
+        #check to see if we have write access to path
+        try:
+            fn = os.path.join(self.path,"test")
+            fd = file(fn,'w')
+            fd.write("this is a test")
+            fd.close()
+            os.unlink(fn)
+        except Exception, e:
+            _logger.debug('attempting to write pictures exception %s'%e)
+            self._parent.game.util.alert(_('Write permission not set for path ')+
+            '%s'%self.base_path+
+            _(' Please see help for iinstructions to correct this problem.'),
+            _('Cannot Write Pictures'))
+            return
+        index = 1          
         for row in self.rows:
             jobject_id = row['jobject_id']
             ds_object = datastore.get(jobject_id)
@@ -251,14 +274,38 @@ class ExportAlbum():
             fn = ds_object.get_file_path()
             mime_type = self.db.get_mime_type(jobject_id)
             lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
-            base = os.path.basename(fn).split('.')
+            #base = os.path.basename(fn).split('.')
+            base = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
+            title = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
             #don't override a suffix that exists
-            if len(base) == 1:
-                base = base[0] + lookup.get(mime_type,'')
+            #if len(base) == 1:
+            if base:
+                base = base + lookup.get(mime_type,'')
+                base = base.replace(' ','_')
             else:
                 base = os.path.basename(fn)
+                base = base + lookup.get(mime_type,'')
+            base = '%s'%index +'_' + base
             _logger.debug('exporting %s to %s'%(fn,os.path.join(self.path,base),))
             shutil.copy(fn,os.path.join(self.path,base))
             ds_object.destroy()
+            
+            #now update the metadata associated with this pictures
+            ds_object = datastore.get(jobject_id)
+            md = ds_object.get_metadata()
+            if md:
+                md['title'] = title
+                md['description'] = self._parent.DbAccess_object.get_comment_in_picture(jobject_id)
+                tag = md.get('tags','')
+                if len(tag) == 0:
+                    md['tags'] = self.album
+                else:
+                    md['tags'] = md['tags']  + ', ' +self.album
+                try:
+                    datastore.write(ds_object)
+                except Exception, e:
+                    _logger.debug('datastore write exception %s'%e)
+            ds_object.destroy()
+            index += 1
 
                         

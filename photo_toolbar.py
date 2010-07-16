@@ -111,7 +111,7 @@ class ActivityToolbar(gtk.Toolbar):
         self.insert(separator, -1)
         separator.show()
 
-        self.keep = ToolButton(tooltip=_('Keep'))
+        self.keep = ToolButton(tooltip=_('Save and Start New'))
         #client = gconf.client_get_default()
         #color = XoColor(client.get_string('/desktop/sugar/user/color'))
         #keep_icon = Icon(icon_name='document-save', xo_color=color)

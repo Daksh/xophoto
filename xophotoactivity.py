@@ -130,6 +130,7 @@ class XoPhotoActivity(activity.Activity):
         
         # Build the Pygame canvas.
         self._pygamecanvas = sugargame.canvas.PygameCanvas(self)
+        self.toolbox.connect('add',self.pygame_repaint_cb)
 
         # Note that set_canvas implicitly calls read_file when resuming from the Journal.
         self.set_canvas(self._pygamecanvas)
@@ -199,6 +200,9 @@ class XoPhotoActivity(activity.Activity):
         self.toolbox.show()
         self.set_toolbox(self.toolbox)
     
+    def pygame_repaint_cb(self,widget,event):
+        self.game.pygame_repaint()
+
     ################  Help routines
     def _toolbar_changed_cb(self,widget,tab_no):
         if tab_no == HELP_TAB:
@@ -269,42 +273,39 @@ class XoPhotoActivity(activity.Activity):
         """processing when the keep icon is pressed"""
         _logger.debug('entered copy which will save and re-init sql database')
         dict = self.get_metadata()
-        #set a flag to copy the template
-        self.interactive_close = True
         
         #compact the database
-        conn = self.DbAccess_object.get_connection()
+        conn = self.DbAccess_object.connection()
         cursor = conn.cursor()
         cursor.execute('vacuum')
+        self.DbAccess_object.closedb()
+        self.DbAccess_object = None
+        source = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
 
-        self.save()
-        
-        db_path = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-        try:
-            self.DbAccess_object = dbphoto.DbAccess(db_path)
-        except Exception,e:
-            _logger.debug('database template failed to open error:%s'%e)
-            exit()
-        source = db_path
         ds = datastore.create()
-        ds.metadata['title'] = _('New Photo Stack')
+        default_title = _('Saved Stacks')
+        ds.metadata['title'] = dict.get('title',default_title)
         ds.metadata['activity_id'] = dict.get('activity_id')
         ds.metadata['activity'] = 'org.laptop.XoPhoto'
         ds.metadata['mime_type'] = 'application/binary'
         ds.metadata['icon-color'] = dict.get('icon-color')
         dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance','xophoto.sqlite')
         
-        #albums are stored in the groups table, so start fresh
-        conn = self.DbAccess_object.get_connection()
-        cursor = conn.cursor()
-        cursor.execute("delete from groups")
-        conn.commit()
-        
         shutil.copyfile(source,dest)
         ds.set_file_path(dest)
         datastore.write(ds,transfer_ownership=True)
         ds.destroy()
         
+        #sanity check forces check of integrity of thumbnails and picture data, causes
+        #   reload of template if sanity check fails
+        self.db_sanity_check = False
+        #make_object forces copying of the template to data directory
+        self.make_object = True
+        self.read_file(None)
+        self.make_object = False
+        
+        # Start the game running  again.
+        self.game.do_startup()
         
     def edit_toolbar_doimport_cb(self, view_toolbar):
         if not self.file_tree:
@@ -350,7 +351,7 @@ class XoPhotoActivity(activity.Activity):
             
             _logger.debug('album to export: %s. Number of pictures found: %s'%(album_name,len(rows),))
             #def __init__(self,rows,db,sources,path):
-            exporter = ExportAlbum(rows,self.game.db,new_path)
+            exporter = ExportAlbum(self,rows,self.game.db,base_path,new_path)
             exporter.do_export()
 
     def use_toolbar_do_fullscreen_cb(self,use_toolbar):
@@ -438,13 +439,14 @@ class XoPhotoActivity(activity.Activity):
             _logger.debug('title was %s'%dict.get('title','no title given'))
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             _logger.debug('reading from %s and writing to %s'%(file_path,dest,))
-            try:
-                shutil.copy(file_path, dest)
-                _logger.debug('completed writing the sqlite file')
-                    
-            except Exception, e:
-                _logger.debug('read sqlite file to local error %s'%e)
-                return
+            if file_path:
+                try:
+                    shutil.copy(file_path, dest)
+                    _logger.debug('completed writing the sqlite file')
+                        
+                except Exception, e:
+                    _logger.debug('read sqlite file to local error %s'%e)
+                    return
         try:
             self.DbAccess_object = DbAccess(dest)
         except Exception,e:
@@ -638,6 +640,9 @@ class EditToolbar(gtk.Toolbar):
                                                 1, self.__update_title_cb)
     def __update_title_cb(self):
         self._parent.DbAccess_object.set_title_in_picture(self.jobject_id,self.title_entry.get_text())
+        #the following calls to the Datastore introduce too much latency -- do at time of export
+        #Datastore_SQLite(self._parent.game.db).update_metadata(\
+            #self.jobject_id,title=self.title_entry.get_text())
         self._update_title_sid = None
         return False
         
@@ -647,6 +652,8 @@ class EditToolbar(gtk.Toolbar):
                                                 1, self.__update_comment_cb)
     def __update_comment_cb(self):
         self._parent.DbAccess_object.set_comment_in_picture(self.jobject_id,self.comment_entry.get_text())
+        #Datastore_SQLite(self._parent.game.db).update_metadata(\
+            #self.jobject_id,description=self.comment_entry.get_text())
         self._update_comment_sid = None
         return False
         

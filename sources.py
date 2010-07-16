@@ -96,7 +96,7 @@ class Datastore_SQLite():
         _logger.debug('Journal/datastore entries found:%s'%count)
         added = 0
         a_row_found = False
-        cursor = self.db.get_connection().cursor()
+        cursor = self.db.connection().cursor()
         for ds in results:
             #at least for now assume that the newest images are returned first
             if not a_row_found:
@@ -152,6 +152,26 @@ class Datastore_SQLite():
         except Exception,e:
             _logger.debug('delete_jobject_id_from_datastore error: %s'%e)
     
+    def update_metadata(self,jobject_id,**kwargs):
+        try:
+            ds_obj = datastore.get(jobject_id)
+        except Exception,e:
+            _logger.debug('update metadata error: %s'%e)
+            return None
+        if ds_obj:
+            md = ds_obj.get_metadata()
+            if md:
+                for key in kwargs.keys():
+                    md[key] = kwargs[key]
+                try:
+                    datastore.write(ds_obj)
+                except Exception, e:
+                    _logger.debug('datastore write exception %s'%e)
+            else:
+                _logger.error('no metadata recovered from journal')
+        else:
+            _logger.error('no jobject returned from datastore.get()')
+            
 class FileTree():
     def __init__(self,db,activity):
         self.db = db
@@ -170,7 +190,7 @@ class FileTree():
             self.dialog.show_all()
         self.dialog.set_default_response(gtk.RESPONSE_OK)
         #self.dialog.set_current_folder(os.path.dirname(self.last_filename))       
-        
+        self.dialog.set_current_folder('/home/olpc/Pictures')               
         filter = gtk.FileFilter()
         filter.set_name("All files")
         filter.add_pattern("*")
