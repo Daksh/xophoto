@@ -222,6 +222,51 @@ class DbAccess():
             cursor.execute('insert into data_cache.picture (jobject_id) values (?)',(str(jobject_id),))              
             self.con.commit()
     
+    def set_title_in_picture(self,jobject_id,title):
+        if not jobject_id: return #during startup, jobject not yet set
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
+        cur = self.connection().cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            sql = """update data_cache.picture set title = ? where jobject_id = ?"""
+            cursor = self.connection().cursor()
+            cursor.execute(sql,(title,jobject_id,))             
+            self.con.commit()            
+
+    def get_title_in_picture(self,jobject_id):
+        if not jobject_id: return #during startup, jobject not yet set
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
+        cur = self.connection().cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0]['title']
+        return None
+
+    def set_comment_in_picture(self,jobject_id,comment):
+        if not jobject_id: return #during startup, jobject not yet set
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
+        cur = self.connection().cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            sql = """update data_cache.picture set comment = ? where jobject_id = ?"""
+            cursor = self.connection().cursor()
+            cursor.execute(sql,(comment,jobject_id,))             
+            self.con.commit()            
+
+    def get_comment_in_picture(self,jobject_id):
+        if not jobject_id: return #during startup, jobject not yet set
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
+        cur = self.connection().cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0]['comment']
+        return None
+
+    
     def clear_in_ds(self):
         self.connection().execute('update data_cache.picture set in_ds = 0')
     
@@ -290,7 +335,7 @@ class DbAccess():
         cursor.execute('select * from groups where category = ? and subcategory = ?',\
                        ('albums',str(album_id,)))
         rows = cursor.fetchmany()
-        _logger.debug('create-update found %s records. album:%s. id:%s'%(len(rows),album_id,name,))
+        _logger.debug('create-update found %s records. album:%s. Name:%s'%(len(rows),album_id,name,))
         if len(rows)>0  : #pick up the name
             id = rows[0]['id']
             cursor.execute("update groups set  subcategory = ?, jobject_id = ? where id = ?",\
@@ -327,6 +372,7 @@ class DbAccess():
         conn.commit()
     
     def write_transform(self,jobject_id,w,h,x_thumb,y_thumb,image_blob,rec_id = None,transform_type='thumb',rotate_left=1,seq=0):
+        _logger.debug('write_transform for rec_id %s'%rec_id)
         if image_blob:
             thumbstr = pygame.image.tostring(image_blob,'RGB')
         else:

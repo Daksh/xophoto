@@ -1,16 +1,6 @@
 #!/usr/bin/env python
 # display.py 
 #
-"""to do list
-reorder thumbnails3
-change album name2
-hover display annotation
-function on build 802--4.5
-proprietary jobject_id for journal thumbnails5
-gtk-idle-add for thumbnail processing6
-pygame scrolling1
-start slide show roughing out4
-"""
 # Copyright (C) 2010  George Hunt
 #
 # This program is free software; you can redistribute it and/or modify
@@ -267,11 +257,13 @@ class OneThumbnail():
         """strategy for thumbnails: keep track of all the transformations.
             let the thumbnail reflect the sum of all the transformations. But
             apply them on the fly to the full size renditions, and to the uploaded
-            version  (still need to satisfy myself that the metadata is the pictures
+            version  (still need to satisfy myself that the metadata in the pictures
             is preserved).
         """
         _logger.debug('entered rotate_thumbnail_left_90')
-        if not jobject_id: return
+        if not jobject_id:
+            _logger.debug('no jobject_id')    
+            return None
         start = time.clock()
         rows = self.db.get_transforms(jobject_id)
         surf = None
@@ -309,7 +301,8 @@ class OneThumbnail():
             self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,rotated_surf,
                                     rec_id=rotate_type_row_id,transform_type='rotate',rotate_left=num)
         else:
-            self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,None,transform_type='rotate',rotate_left=num)
+            self.db.write_transform(jobject_id,w,h,scaled_x,scaled_y,None,transform_type='rotate',
+                                    rotate_left=num)
             
         _logger.debug('%f seconds to rotate the thumbnail'%(time.clock()-start))
         self.scaled = None  #force a reload from the database
@@ -333,9 +326,10 @@ class OneAlbum():
         database:'xophoto.sqlite' which is stored in the journal
     Displays one album and the associated thumbnails
     """
-    def __init__(self,dbaccess,album_id):
+    def __init__(self,dbaccess,album_id,parent):
         self.db = dbaccess
         self.album_id = album_id
+        self._parent = parent
         self.pict_dict = {}
         self.large_displayed = False
         self.screen_width = screen_w - album_column_width - thick
@@ -347,6 +341,9 @@ class OneAlbum():
         self.display_end_index = 0
         self.jobject_id = None
         self.sb = None
+        
+        #the cursor rows for the thumbnails
+        self.rows = None
         
         #thumbnail_surface is the viewport into thumbnail_world, mapped to screen for each album
         self.thumbnail_world = None
@@ -396,8 +393,10 @@ class OneAlbum():
             pos_x = (i % self.pict_per_row) * self.xy_size
             pos_y = (row  - self.origin_row) * self.xy_size
             selected = self.thumb_index == i
-            if selected: self.last_selected = self.pict_dict[i]
-            
+            if selected:
+                self.last_selected = self.pict_dict[i]
+                self._parent._activity.edit_toolbar.set_jobject_id(self.rows[i]['jobject_id'])
+                        
             #do the heavy lifting
             self.pict_dict[i].paint_thumbnail(self.thumbnail_world,pos_x,pos_y,self.xy_size,self.xy_size,selected)
             
@@ -413,6 +412,10 @@ class OneAlbum():
         self.thumbnail_surface = self.thumbnail_panel(self.thumbnail_world)
         screen.blit(self.thumbnail_surface,(album_column_width,0))
         pygame.display.flip()
+        
+    def repaint_whole_screen(self):
+        self._parent.paint_albums()
+        self.repaint()
        
     def release_cycles(self):
         while gtk.events_pending():
@@ -554,6 +557,7 @@ class OneAlbum():
         else:
             self.thumb_index = len(self.rows) - 1
         self.select_pict(self.thumb_index)
+        self._parent._activity.edit_toolbar.set_jobject_id(self.rows[self.thumb_index]['jobject_id'])
         return self.thumb_index
             
     def get_jobject_id_at_xy(self,x,y):
@@ -572,8 +576,11 @@ class OneAlbum():
             return None
 
     def get_selected_jobject_id(self):
-        if self.rows and self.thumb_index and self.thumb_index < len(self.rows):
+        if self.rows and self.thumb_index < len(self.rows):
             return self.rows[self.thumb_index]['jobject_id']
+        else:
+            _logger.debug('selected_jobject not found num_rows:%s thumb_index:%s'%
+                          (len(self.rows),self.thumb_index,))
         return None
         
 
@@ -768,7 +775,7 @@ class DisplayAlbums():
         _logger.debug('initializing albums. %s found'%len(album_rows))
         for row in album_rows:
             id = str(row['subcategory'])
-            self.album_objects[id] = OneAlbum(self.db,id)
+            self.album_objects[id] = OneAlbum(self.db,id,self)
         #the initial screen will show the contents of the journal
         #self.display_journal()
         
@@ -877,25 +884,25 @@ class DisplayAlbums():
         
         #now change the thumbnail side of the screen
         try:
-            album_name = self.album_rows[int(self.album_index)]['subcategory']
+            album_timestamp = self.album_rows[int(self.album_index)]['subcategory']
             album_title = self.album_rows[int(self.album_index)]['jobject_id']
         except Exception,e:
-            album_name = journal_id #the journal
+            album_timestamp = journal_id #the journal
             _logger.debug('exception fetching thumbnails %s'%e)
             return
-        self.selected_album_id = album_name
-        if album_name == trash_id:
+        self.selected_album_id = album_title
+        if album_timestamp == trash_id:
             self._activity.activity_toolbar.empty_journal_button.show()
         else:
             self._activity.activity_toolbar.empty_journal_button.hide()           
-        _logger.debug('now display the thumbnails with the album identifier %s'%album_name)
+        _logger.debug('now display the thumbnails with the album identifier %s'%album_timestamp)
         change_name = True
         for id,name in  self.predefined_albums:
-            if album_name == id:
+            if album_timestamp == id:
                 change_name = False
         if change_name:
             self._activity.activity_toolbar.title.set_text(album_title)
-        self.display_thumbnails(album_name,new_surface=True)
+        self.display_thumbnails(album_timestamp,new_surface=True)
         pygame.display.flip()
         
     def add_to_current_album(self,jobject_id,current_album_id=None,name=None):
@@ -942,7 +949,12 @@ class DisplayAlbums():
         self.paint_albums()
         
     def set_name(self,name):
-        self.db.create_update_album(self.album_rows[self.album_index]['subcategory'],name)
+        album_timestamp = str(self.album_rows[self.album_index]['subcategory'])
+        for id,predefined_name in  self.predefined_albums:
+            _logger.debug('album_timestamp: %s id:%s'%(album_timestamp,id,))
+            if album_timestamp == id:
+                return
+        self.db.create_update_album(album_timestamp,name)
         self.paint_albums()
         pygame.display.flip()
         
@@ -952,7 +964,7 @@ class DisplayAlbums():
         self.accumulation_target = str(datetime.datetime.today())
         _logger.debug('new album is:%s'%self.accumulation_target)
         self.db.create_update_album(self.accumulation_target,name)
-        self.album_objects[self.accumulation_target] = (OneAlbum(self.db,self.accumulation_target))
+        self.album_objects[self.accumulation_target] = (OneAlbum(self.db,self.accumulation_target,self))
         #save off the unique id(timestamp)as a continuing target
         self.db.set_last_album(self.accumulation_target)
         self.paint_albums()
@@ -1082,12 +1094,13 @@ class DisplayAlbums():
             
     def rotate_selected_album_thumbnail_left_90(self):
         album_object = self.album_objects.get(self.selected_album_id)
+        thumb_object = None
         if album_object:
             thumb_object = album_object.pict_dict.get(album_object.thumb_index)
         if thumb_object:
             thumb_object.rotate_thumbnail_left_90(album_object.get_selected_jobject_id())
-            pygame.display.flip()
-        
+            album_object.repaint()
+            
     #####################            ALERT ROUTINES   ##################################
 class Utilities():
     def __init__(self,activity):
@@ -1168,7 +1181,7 @@ class Application():
         self.file_tree = None
         self.util = Utilities(self._activity)
         self.album_collection = None
-        self.vs = None
+        self.vs = ViewSlides(self)
     
     def first_run_setup(self):        
         #scan the datastore and add new images as required
@@ -1245,27 +1258,18 @@ class Application():
             _logger.debug('took %s to display journal'%(time.clock()-start))
 
     def view_slides(self):
-        #get the album rows for viewing
-        self.pygame_focus()
+        album_object = self.set_album_for_viewslides()
+        if album_object:
+            self.vs.run()
+            #on return from viewing slides, restore the normal screen
+            album_object.repaint_whole_screen()
+        
+    def set_album_for_viewslides(self):
         album_id = self.album_collection.selected_album_id
         album_object = self.album_collection.album_objects.get(album_id,None)
-        if album_object:
-            if self.vs:
-                self._activity.use_toolbar.slideshow_set_break(True)
-                return
-            else:
-                self.vs = ViewSlides(self,album_object,self.db)
-                self._activity.use_toolbar.slideshow_set_break(False)
-                self.vs.run()
-        self.album_collection.paint_albums()
-        album_id = self.album_collection.selected_album_id
-        thumb_surf_obj = self.album_collection.album_objects.get(album_id,None)
-        screen.blit(thumb_surf_obj.thumbnail_surface,(album_column_width,0))
-        pygame.display.flip()
+        self.vs.set_album_object(album_object)
+        return album_object
             
-    def pygame_focus(self):
-        self._activity.window.focus()
-
     def run(self):
         global screen
         global in_click_delay

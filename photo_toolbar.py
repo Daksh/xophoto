@@ -61,21 +61,27 @@ class ActivityToolbar(gtk.Toolbar):
             self.title.connect('activate', self.__update_title_cb)
             self._add_widget(self.title)
             
-            self.add_album = ToolButton('list-add')
-            self.add_album.set_tooltip(_("Add Album"))
+            fn = os.path.join(os.getcwd(),'assets','stack_new.png')
+            button = ImageButton()
+            tooltip = _("Add Album Stack")
+            button.set_image(fn,tip=tooltip)
+            self.add_album = button
             self.add_album.show()
             self.add_album.connect('clicked', self.__add_album_clicked_cb)
             self.insert(self.add_album,-1)
             
-            fn = os.path.join(os.getcwd(),'assets','stack_background.png')
+            fn = os.path.join(os.getcwd(),'assets','stack_del.png')
             button = ImageButton()
-            button.set_image(fn)
+            tooltip = _("Delete Album Stack")
+            button.set_image(fn,tip=tooltip)
             button.connect('clicked', self.__delete_album_clicked_cb)
             self.insert(button,-1)
 
-            self.empty_journal_button = ToolButton()
-            self.empty_journal_button.set_stock_id('gtk-cancel')
-            self.empty_journal_button.set_tooltip(_("Empty Trash"))
+            fn = os.path.join(os.getcwd(),'assets','trash_del.png')
+            button = ImageButton()
+            tooltip = _("Remove Trash Images from XO")
+            button.set_image(fn,tip=tooltip)
+            self.empty_journal_button = button
             self.empty_journal_button.hide()
             self.empty_journal_button.connect('clicked',self.__empty_trash_clicked_cb)
             self.insert(self.empty_journal_button,-1)
@@ -186,12 +192,6 @@ class ActivityToolbar(gtk.Toolbar):
         self._activity.metadata['title'] = title
         self._activity.metadata['title_set_by_user'] = '1'
         self._activity.game.change_album_name(title)
-        #self._activity.save()
-        """
-        shared_activity = self._activity.get_shared_activity()
-        if shared_activity:
-            shared_activity.props.name = title
-        """
         self._update_title_sid = None
         
         return False
@@ -222,7 +222,8 @@ class ImageButton(ToolButton):
             self.image.set_from_pixbuf(pixbuf)
             self.image.show()
             self.set_icon_widget(self.image)
-            self.set_tooltip(_("Remove Album"))
+            if tip:
+                self.set_tooltip(tip)
             self.show()
         
 class ActivityToolbox(Toolbox):

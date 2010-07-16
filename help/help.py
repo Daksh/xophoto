@@ -44,9 +44,9 @@ from xpcom.components import interfaces
 """
 gobject.threads_init()
 
-HOME = os.path.join(activity.get_bundle_path(), _('help/HelpApi.htm'))
+HOME = os.path.join(activity.get_bundle_path(), _('help/xophoto.html'))
 #HOME = "http://website.com/something.html"
-HELP_PANE = 1
+HELP_PANE = 3
 
 # Initialize logging.
 import logging
@@ -85,7 +85,7 @@ class Help(Window):
         editbar.show_all()
         
         usebar = gtk.Toolbar()
-        self.toolbox.add_toolbar(_('Use'), usebar)
+        self.toolbox.add_toolbar(_('Output'), usebar)
         usebar.show_all()
         
         self.help_toolbar = Toolbar(self._web_view)

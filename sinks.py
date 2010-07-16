@@ -43,26 +43,29 @@ _logger.setLevel(logging.DEBUG)
 
 class ViewSlides():
 
-    def __init__(self,parent,album_object,db):
+    def __init__(self,parent):
         self._parent = parent
-        self.album_object = album_object
-        self.rows = album_object.rows
-        self.db = db
-        #self.album_id = ablum_id
-        self.index = album_object.thumb_index
+        self.db = None
         self.paused = False
         self.loop = True
         self.dwell_time = 3
-        kwargs = {}
         gobject.timeout_add(1000, self.__timeout)
-        self.time_end = 10
         self.current_time = 1 #set so the first call of timeout will initiate action
         self.running = False
-        display.screen.fill((0,0,0))
-        pygame.display.flip()
+        #display.screen.fill((0,0,0))
+        #pygame.display.flip()
 
+    def set_album_object(self,album_object):
+        """ViewSlides is intstantiated at startup, before db is open, also need
+        to know which album to display"""
+        if not album_object: return
+        self.album_object = album_object
+        self.rows = album_object.rows
+        self.index = album_object.thumb_index
+        self.db = album_object.db
+    
     def __timeout(self):
-        _logger.debug('timer tick %s'%self.current_time)
+        #_logger.debug('timer tick %s'%self.current_time)
         if self.paused or not self.running:
             return True       
         self.current_time -= 1
@@ -73,7 +76,59 @@ class ViewSlides():
             
     def display_next(self):
         self.current_time = self.dwell_time
+        if self.index < 0 or self.index >= len(self.rows):
+            _logger.debug('display_next index out of bounds')
+            return
         jobject_id = self.rows[self.index]['jobject_id']
+        if not jobject_id: return
+
+        paint = self.transform_scale_slide(jobject_id)
+        display.screen.blit(paint,(0,0))
+        pygame.display.flip()
+        
+        self.index += 1
+        if self.index == len(self.rows):
+            if self.loop:
+                self.index = 0
+            else:
+                self.index -= 1
+        self.album_object.thumb_index = self.index
+       
+    def transform_scale_slide(self,jobject_id):
+        """return surface transformed per database transforms,onto screen sized target"""
+        _logger.debug('entered transform_scale_slide')
+        if not jobject_id:
+            _logger.debug('no jobject_id')    
+            return None
+        start = time.clock()
+        rows = self.db.get_transforms(jobject_id)
+        surf = None
+        rotate_type_row_id = None
+        row_id = None
+        number_left_90s = 0
+        for row in rows:
+            if row['transform_type'] == 'rotate':
+                if row['rotate_left']:
+                    number_left_90s = row['rotate_left']
+                    _logger.debug('number of 90 degree rotations:%s'%number_left_90s)
+            else:
+                #other transformtions go here
+                pass
+            
+        #get the original image from the journal
+        surf = self.get_picture(jobject_id)
+        if not surf: return
+        display.screen.fill((0,0,0))
+        if number_left_90s > 0:
+            rotated_surf = pygame.transform.rotate(surf,number_left_90s * 90)
+            surf = rotated_surf
+        #center and scale the transformed image to the screen size
+        paint = self.place_picture(surf,display.screen)        
+        _logger.debug('%f seconds to rotate the slide'%(time.clock()-start))
+        return paint
+        
+    def get_picture(self,jobject_id):
+        """return picture surface from journal, given jobject_id"""
         try:
             ds_obj = datastore.get(jobject_id)
         except Exception,e:
@@ -82,45 +137,45 @@ class ViewSlides():
         if ds_obj:
             fn = ds_obj.get_file_path()
             try:
-                self.surf = pygame.image.load(fn)
+                surf = pygame.image.load(fn)
             except Exception,e:
-                print('scale_image failed to load %s'%fn)
+                print('scale_image failed to load %s Exception: %s'%(fn,e))
                 return None
             finally:
                 ds_obj.destroy()
-        self.surf.convert
-        display.screen.fill((0,0,0))
-        screen = display.screen
+            return surf
+        return None
         
-        #center and scale image in available space
-        screen_aspect = float(display.screen_w)/display.screen_h
-        screen_rect = display.screen.get_rect()
-        image_rect = self.surf.get_rect()
-        w,h = self.surf.get_size()
+    def place_picture(self,source,target):
+        """return surface centered and scaled,but not blitted to target"""
+        target_rect = target.get_rect()
+        screen_w,screen_h = target_rect.size
+        target_surf = pygame.Surface((screen_w,screen_h))
+        image_rect = source.get_rect()
+        screen_aspect = float(screen_w)/screen_h
+        w,h = source.get_size()
         aspect = float(w)/h
         if screen_aspect < aspect: #sceen is wider than image
-            x = display.screen_w
+            x = screen_w
             y = int(x / aspect)
         else:
-            y = display.screen_h
+            y = screen_h
             x = int(y * aspect)
         _logger.debug('screen_x:%s screen_y:%s image_x:%s image_y:%s x:%s y:%s'%\
-                      (display.screen_w,display.screen_h,w,h,x,y,))
-        paint = pygame.transform.scale(self.surf,(x,y))
+                      (screen_w,screen_h,w,h,x,y,))
+        paint = pygame.transform.scale(source,(x,y))
         image_rect = paint.get_rect()
         if screen_aspect < aspect: #sceen is wider than image
-            image_rect.midleft = screen_rect.midleft
+            image_rect.midleft = target_rect.midleft
         else:
-            image_rect.midtop = screen_rect.midtop                    
-        display.screen.blit(paint,image_rect)
-        pygame.display.flip()
-        self.index += 1
-        if self.index == len(self.rows):
-            if self.loop:
-                self.index = 0
+            image_rect.midtop = target_rect.midtop
+        target_surf.blit(paint,image_rect)
+        target_surf.convert()
+        return target_surf
        
     def run(self):
         self.running = True
+        self.paused = False
         _logger.debug('started the run loop')
         while self.running:
             # Pump GTK messages.
@@ -143,22 +198,29 @@ class ViewSlides():
                         self.display_next()
 
     def pause(self):
-        self.pause = True
+        self.paused = True
         
     def prev_slide(self):
+        self.index = self.album_object.thumb_index 
         if self.index > 1:
             self.index -= 2
+        elif self.index == 1:
+            self.index = len(self.rows) - 1
         self.display_next()
         
     def next_slide(self):
+        self.index = self.album_object.thumb_index 
+
         self.display_next()
         
     def play(self):
-        self.pause = False
+        self.paused = False
+        self.run()
         
     def stop(self):
         self.running = False
-        'gtk.STOCK_MEDIA_STOP'
+        #'gtk.STOCK_MEDIA_STOP'
+        self.album_object.repaint_whole_screen()
         
 
 class ExportAlbum():
