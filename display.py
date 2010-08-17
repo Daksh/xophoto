@@ -48,12 +48,14 @@ from sinks import *
 
 #pick up activity globals
 from xophotoactivity import *
+import xophotoactivity
 
 #Display Module globals
 mouse_timer = time.time()
 in_click_delay = False
 in_db_wait = False
 in_drag = False
+in_grab = False
 screen_h = 0
 screen_w = 0
 screen = None
@@ -72,6 +74,7 @@ album_height = 190
 album_size = (180,165)
 album_location = (25,25)
 album_aperature = (150,125)
+startup_clock = 0
 
 journal_id =  '20100521T10:42'
 trash_id = '20100521T11:40'
@@ -347,6 +350,7 @@ class OneAlbum():
         
         #thumbnail_surface is the viewport into thumbnail_world, mapped to screen for each album
         self.thumbnail_world = None
+        self.thumbnail_redo_world = False
         self.thumbnail_surface = pygame.Surface((screen_w-album_column_width,screen_h)).convert()
         self.thumbnail_surface.fill(background_color)
         self.num_rows = 1
@@ -366,6 +370,9 @@ class OneAlbum():
         """
         Put multiple images on pygame screen.
         """
+        if not new_surface and self.thumbnail_redo_world:
+            self.thumbnail_redo_world = False
+            new_surface = True
         #make sure we have the most recent list
         is_journal = self.album_id == journal_id
         self.rows = self.db.get_album_thumbnails(self.album_id,is_journal)
@@ -632,10 +639,10 @@ class OneAlbum():
         row = num // self.pict_per_row
         min_y = row * self.xy_size
         if min_y < y:
-            self.sb.scroll(-self.xy_size * self.sb.ratio)
+            self.sb.scroll((min_y - y) * self.sb.ratio)
         max_y = (row + 1) * self.xy_size
         if max_y > y + screen_h:
-            self.sb.scroll(self.xy_size * self.sb.ratio)
+            self.sb.scroll((max_y - y - screen_h) * self.sb.ratio)
         self.repaint()
     
     def scroll_up(self,num=3):
@@ -955,7 +962,7 @@ class DisplayAlbums():
 
 
         #ask the album object to re-create the world
-        self.album_objects[self.accumulation_target].thumbnail_world = None
+        self.album_objects[self.accumulation_target].thumbnail_redo_world = True
         self.album_objects[self.accumulation_target].set_top_image(self.accumulation_target)
             
         #self.display_thumbnails(self.accumulation_target,new_surface=True)
@@ -1037,28 +1044,35 @@ class DisplayAlbums():
             _logger.debug('could not find jobject_id in add_to_aqlbum_at_xy')
             
     def start_grab(self,x,y):
+        global in_grab
         self.start_grab_x = x
         self.start_grab_y = y
         #change the cursor some way
-        """
-        fn = os.path.join(os.getcwd(),'assets','closed_hand.xbm')
-        patfn = fn
-        fd = open(fn,'r')
-        bitstring = fd.read()
-        bitpattern = gtk.gdk.bitmap_create_from_data(None,bitstring,48,48)
-
-        fn = os.path.join(os.getcwd(),'assets','closed_hand_mask.xbm')
-        maskfn = fn
-        fd = open(fn,'r')
-        maskstring = fd.read()
-        bitmask = gtk.gdk.bitmap_create_from_data(None,maskstring,48,48)
-        
-        a, b, c, d = pygame.cursors.load_xbm(patfn,maskfn)
-        #pygame.mouse.set_cursor(a,b,c,d)
-        
-        #self._activity.window.set_cursor(gtk.gdk.Cursor(pattern,mask,gtk.gdk.Color(255,255,255),gtk.gdk.Color(0,0,0),24,24))
-        """
-        self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.DOTBOX))
+        if in_grab:
+            in_grab = False
+            self._activity.window.set_cursor(None)
+        else:       
+            in_grab = True
+            fn = os.path.join(os.getcwd(),'assets','closed_hand.xbm')
+            #fn = os.path.join(os.getcwd(),'assets','handcursor.xbm')
+            fd = open(fn,'r')
+            bitstring = fd.read()
+            #_logger.debug('cursordata:%s'%bitstring)
+            bitpattern = gtk.gdk.bitmap_create_from_data(None,bitstring,48,48)
+    
+            fn = os.path.join(os.getcwd(),'assets','closed_hand_mask.xbm')
+            #fn = os.path.join(os.getcwd(),'assets','handcursor_mask.xbm')
+            maskfn = fn
+            fd = open(fn,'r')
+            maskstring = fd.read()
+            bitmask = gtk.gdk.bitmap_create_from_data(None,maskstring,48,48)
+            
+            #a, b, c, d = pygame.cursors.load_xbm(patfn,maskfn)
+            #pygame.mouse.set_cursor(a,b,c,d)
+            
+            
+            self._activity.window.set_cursor(gtk.gdk.Cursor(bitpattern,bitmask,gtk.gdk.Color(255,255,255),gtk.gdk.Color(0,0,0),24,24))
+            #self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.DOTBOX))
             
     def drop_image(self, start_x,start_y,drop_x, drop_y):
         self._activity.window.set_cursor(None)
@@ -1067,10 +1081,32 @@ class DisplayAlbums():
             jobject_id = self.album_objects[self.selected_album_id].get_jobject_id_at_xy(start_x,start_y)
             index = self.get_album_index_at_xy(drop_x, drop_y)
             if not index or not jobject_id: return
+
+            current_album_id = self.get_current_album_identifier()
             
+            #if item dragged from trash, put it back in journal_id as well as target stack
+            if  current_album_id == trash_id:
+                self.db.delete_image(trash_id,jobject_id)
+                self.album_objects[current_album_id].paint(True)
+                
+                #unconditionally add the thumbnail back into the list of journal pictures
+                self.db.add_image_to_album(journal_id, jobject_id)
+                self.album_objects[journal_id].thumbnail_redo_world = True
+                if  current_album_id != journal_id: #add it to the target also
+                    if index > len(self.album_rows)-1:
+                        self.create_new_album(self.default_name)
+                        self.db.add_image_to_album(self.accumulation_target, jobject_id)
+                        self.album_objects[self.accumulation_target].set_top_image(jobject_id)
+                    else:
+                        self.db.add_image_to_album(self.album_rows[index]['subcategory'], jobject_id)
+                #guarantee full repaint of thumbnails on next repaint
+                self.album_objects[trash_id].thumbnail_redo_world = True
+                self.refresh_album_rows()
+                self.paint_albums()
+                return
+                                
             #if dropped on the trash icon
             if self.get_album_id_at_index(index) == trash_id: #a request to delete
-                current_album_id = self.get_current_album_identifier()
                 self.db.delete_image(current_album_id,jobject_id)
                 self.album_objects[current_album_id].paint(True)
                 if  current_album_id == journal_id:
@@ -1091,7 +1127,7 @@ class DisplayAlbums():
             self.refresh_album_rows()
             self.paint_albums()
             #guarantee that the next time the thumb nails are painted, the new one is included
-            self.album_objects[self.accumulation_target].thumbnail_world = None
+            self.album_objects[self.accumulation_target].thumbnail_redo_world = True
             
         #the drop was on thumbnail side of screen, this is a reorder request
         else:
@@ -1196,7 +1232,6 @@ class Application():
     def __init__(self, activity):
         self._activity = activity
         #self._activity.window.connect('activate-focus',self.expose_event_cb)
-        self.in_grab = False
         self.file_tree = None
         self.util = Utilities(self._activity)
         self.album_collection = None
@@ -1221,22 +1256,15 @@ class Application():
         self.pygame_repaint()
             
     def pygame_repaint(self):
-        _logger.debug('pugame_repaint')
+        _logger.debug('pygame_repaint')
         if not self.album_collection: return
         album_id = self.album_collection.selected_album_id
         album_object = self.album_collection.album_objects.get(album_id,None)
         if not album_object: return
         album_object.repaint_whole_screen()
-        pygame.display.flip()
-    """        
-    def show_progress(self,button,id):
-        self.pa = ProgressAlert()
-        self._activity.add_alert(self.pa)
-        self.pa.connect('response',self._response_cb)
-       
-    def _response_cb(self,alert,response):
-        self._activity.remove_alert(self.pa)
-    """
+        _logger.debug('pygame_repaint completed')
+        return False
+
     def do_startup(self):
             start = time.clock()
             
@@ -1248,7 +1276,7 @@ class Application():
                 c.execute('vacuum')
                 conn.commit()
                 
-            #alert = self.util.alert(_('A quick check of the Journal for new images'),_('PLEASE BE PATIENT'))
+            alert = self.util.alert(_('A quick check of the Journal for new images'),_('PLEASE BE PATIENT'))
             try:
                 #this step took 2.5 seconds to add 195 records to picture from datastore on 1.5XO
                 #and 1 second when no records were added               
@@ -1271,7 +1299,7 @@ class Application():
                 self.db = self.DbAccess_object
             _logger.debug('check for recent images took %f seconds'%(time.clock()-start))
                 
-            #self.util.remove_alert(alert)            
+            self.util.remove_alert(alert)            
 
             #if the picture table is empty, populate it from the journal, and initialize
             if ds_count < 10:
@@ -1298,6 +1326,10 @@ class Application():
         self.vs.set_album_object(album_object)
         return album_object
             
+    def end_db_delay(self):    
+        global in_db_wait
+        in_db_wait = False
+
     def run(self):
         global screen
         global in_click_delay
@@ -1305,11 +1337,24 @@ class Application():
         global screen_h
         global in_db_wait
         global in_drag
+        global startup_clock
+        startup_clock = xophotoactivity.startup_clock
         if True:
+            if not self._activity.DbAccess_object:  #we need to wait for the read-file to finish
+                Timer(5.0, self.end_db_delay, ()).start()
+                in_db_wait = True
+                while not self._activity.DbAccess_object and in_db_wait:
+                    gtk.main_iteration()
+                if not self._activity.DbAccess_object:
+                    _logger.error('db object not open after timeout in Appplication.run')
+                    dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
+                    try:
+                        self._activity.DbAccess_object = DbAccess(dest)
+                    except Exception,e:
+                        _logger.debug('database failed to open after timeout. error:%s'%e)
+                        exit()
+                    
             self.db = self._activity.DbAccess_object
-            if not self.db.is_open():
-                _logger.debug('failed to open "xophoto.sqlite" database')
-                exit()
             self.ds_sql = Datastore_SQLite(self.db)
             
             screen = pygame.display.get_surface()
@@ -1322,6 +1367,7 @@ class Application():
             screen.fill((album_background_color))
             pygame.display.flip()
 
+            _logger.debug('about to do_startup. Startup Clock:%f'%(time.clock()-startup_clock))
             self.do_startup()
             
             # Flip Display
@@ -1329,6 +1375,7 @@ class Application():
             
             running = True
             x = 0 #initialize in case there is no mouse event
+            _logger.debug('About to start running loop. Startup Clock:%f'%(time.clock()-startup_clock,))
             while running:
                 #pygame.display.flip()
                 # Pump GTK messages.
@@ -1365,6 +1412,8 @@ class Application():
 
                     #mouse events
                     elif event.type == MOUSEBUTTONDOWN:
+                        if event.button > 3:
+                            _logger.debug('finally got a wheel event')
                         if event.button < 4 and self.mouse_timer_running(): #this is a double click
                             self.process_mouse_double_click( event)
                             in_click_delay = False
@@ -1471,7 +1520,6 @@ class Application():
                 if l:
                     self.album_collection.album_objects[self.album_collection.selected_album_id].click(x,y)
                 elif r: 
-                    self.in_grab = True 
                     self.album_collection.start_grab(x,y)
         pygame.display.flip()
                 

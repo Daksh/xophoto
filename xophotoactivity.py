@@ -43,6 +43,7 @@ from sugar import profile
 import gobject
 import sugargame.canvas
 import os
+import time
 import shutil
 from threading import Timer
 from subprocess import Popen, PIPE
@@ -63,6 +64,7 @@ HELP_TAB = 3
 
 #Application Globals
 album_column_width = 200
+startup_clock = time.clock()
 #db can be resumed, new instance, or recovering from db error
 
 import logging
@@ -101,10 +103,14 @@ class XoPhotoActivity(activity.Activity):
             self.make_jobject = False
         else:
             self.make_jobject = True
-            self.read_file(None)
-            _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
         
         activity.Activity.__init__(self, handle, create_jobject = self.make_jobject)
+
+        if self.make_jobject:
+            self.read_file(None)
+            self.save()
+            _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
+
         #does activity init execute the read? check if dbobject is reliably open
         if self.DbAccess_object:
             _logger.debug('database object is_open:%s'%self.DbAccess_object.is_open())
@@ -112,33 +118,36 @@ class XoPhotoActivity(activity.Activity):
             _logger.debug('after activity init, read has not been called')
         self.make_jobject = False
 
+        """
+        self.toolbox = activity.ActivityToolbox(self)
+        self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
+        self.toolbox.show()
+        """
+        # Build the activity toolbar.
+        self.build_toolbar()
+
         #following are essential for interface to Help
         self.help_x11 = None
         self.handle = handle
         self.help = Help(self)
 
-        self.toolbox = activity.ActivityToolbox(self)
-        self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
-        self.toolbox.show()
-
-        toolbar = gtk.Toolbar()
-        self.toolbox.add_toolbar(_('Help'), toolbar)
-        toolbar.show()
-
-        # Build the activity toolbar.
-        self.build_toolbar()
+        #repaint the screen after a frame event
+        self.toolbox.connect_after('expose-event',self.pygame_repaint_cb)
         
         # Build the Pygame canvas.
+        _logger.debug('Initializing Pygame Canvas. Startup Clock:%f'%(time.clock()-startup_clock,))
         self._pygamecanvas = sugargame.canvas.PygameCanvas(self)
-        self.toolbox.connect('add',self.pygame_repaint_cb)
 
         # Note that set_canvas implicitly calls read_file when resuming from the Journal.
+        _logger.debug('Setting Activity Canvas. Startup Clock:%f'%(time.clock()-startup_clock,))
         self.set_canvas(self._pygamecanvas)
         
         # Create the game instance.
+        _logger.debug('Initializing Game. Startup Clock:%f'%(time.clock()-startup_clock,))
         self.game = display.Application(self)
 
         # Start the game running.
+        _logger.debug('Running the Game. Startup Clock:%f'%(time.clock()-startup_clock,))
         self._pygamecanvas.run_pygame(self.game.run)
         
     def build_toolbar(self):
@@ -201,7 +210,8 @@ class XoPhotoActivity(activity.Activity):
         self.set_toolbox(self.toolbox)
     
     def pygame_repaint_cb(self,widget,event):
-        self.game.pygame_repaint()
+        _logger.debug('pygame_repaint_cb')
+        gobject.idle_add(self.game.pygame_repaint)
 
     ################  Help routines
     def _toolbar_changed_cb(self,widget,tab_no):
@@ -210,7 +220,9 @@ class XoPhotoActivity(activity.Activity):
             
     def set_toolbar(self,tab):
         self.toolbox.set_current_toolbar(tab)
-
+        #gobject.idle_add(self.game.pygame_repaint)
+        self.game.pygame_repaint()
+        
     def help_selected(self):
         """
         if help is not created in a gtk.mainwindow then create it
@@ -283,7 +295,8 @@ class XoPhotoActivity(activity.Activity):
         source = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
 
         ds = datastore.create()
-        default_title = _('Saved Stacks')
+        default_title = _('No Stacks')
+        #ds.metadata['title'] = default_title
         ds.metadata['title'] = dict.get('title',default_title)
         ds.metadata['activity_id'] = dict.get('activity_id')
         ds.metadata['activity'] = 'org.laptop.XoPhoto'
@@ -299,10 +312,11 @@ class XoPhotoActivity(activity.Activity):
         #sanity check forces check of integrity of thumbnails and picture data, causes
         #   reload of template if sanity check fails
         self.db_sanity_check = False
-        #make_object forces copying of the template to data directory
-        self.make_object = True
-        self.read_file(None)
-        self.make_object = False
+        self.read_file(None,initialize=True)
+        self.metadata['title'] = default_title
+        self.activity_toolbar.title.set_text(default_title)
+        #save the newly initialized state
+        self.save()
         
         # Start the game running  again.
         self.game.do_startup()
@@ -407,7 +421,7 @@ class XoPhotoActivity(activity.Activity):
             
     
     def read_file(self, file_path, initialize=False):
-        _logger.debug('started read_file %s. make_file flag %s'%(file_path,self.make_jobject))
+        _logger.debug('started read_file: %s. make_file flag %s. initialize:%s'%(file_path,self.make_jobject,initialize))
         if self.make_jobject or initialize:  #make jobject is flag signifying that we are not resuming activity
             _logger.debug(' copied template  rather than resuming')
             if self.DbAccess_object:
@@ -494,7 +508,7 @@ class XoPhotoActivity(activity.Activity):
                     _logger.debug('data_cache template failed to copy error:%s'%e)
                     exit()
                 
-        _logger.debug('completed read_file. DbAccess_jobject is created')        
+        _logger.debug('completed read_file. DbAccess_jobject is created. Since startup:%f'%(time.clock()-startup_clock,))        
         
     def write_file(self, file_path):
         
@@ -533,7 +547,8 @@ class XoPhotoActivity(activity.Activity):
             dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
             try:
                 self.DbAccess_object = DbAccess(dest)
-                self.game.db = self.DbAccess_object
+                if self.game:
+                    self.game.db = self.DbAccess_object
             except Exception,e:
                 _logger.debug('database failed to re-open in write file. error:%s'%e)
                 exit()
@@ -794,7 +809,7 @@ class UseToolbar(gtk.Toolbar):
         tool_item.add(self.dwell_entry)
         self.dwell_entry.show()
         self.insert(tool_item, -1)
-        tool_item.show()
+        tool_item.hide()
 
         separator = gtk.SeparatorToolItem()
         separator.props.draw = True

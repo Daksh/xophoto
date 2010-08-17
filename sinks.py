@@ -270,13 +270,15 @@ class ExportAlbum():
             ds_object = datastore.get(jobject_id)
             if not ds_object:
                 _logger.debug('failed to fetch ds object %s'%jobject_id)
-                return
+                #if the picture was deleted from the datastore, we'll just ignore the error
+                continue
             fn = ds_object.get_file_path()
             mime_type = self.db.get_mime_type(jobject_id)
             lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
             #base = os.path.basename(fn).split('.')
             base = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
             title = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
+            description = self._parent.DbAccess_object.get_comment_in_picture(jobject_id)
             #don't override a suffix that exists
             #if len(base) == 1:
             if base:
@@ -285,7 +287,7 @@ class ExportAlbum():
             else:
                 base = os.path.basename(fn)
                 base = base + lookup.get(mime_type,'')
-            base = '%s'%index +'_' + base
+            base = '%03d'%index +'_' + base
             _logger.debug('exporting %s to %s'%(fn,os.path.join(self.path,base),))
             shutil.copy(fn,os.path.join(self.path,base))
             ds_object.destroy()
@@ -294,8 +296,10 @@ class ExportAlbum():
             ds_object = datastore.get(jobject_id)
             md = ds_object.get_metadata()
             if md:
-                md['title'] = title
-                md['description'] = self._parent.DbAccess_object.get_comment_in_picture(jobject_id)
+                if title:
+                    md['title'] = title
+                if description:
+                    md['description'] = description
                 tag = md.get('tags','')
                 if len(tag) == 0:
                     md['tags'] = self.album

@@ -72,7 +72,7 @@ class Help(Window):
 
         #Mimic the other tabs (hide the fact that this is another window)
         self.toolbox = Toolbox()
-        self.toolbox.connect('current_toolbar_changed',self.goto_cb)
+        self.toolbox.connect_after('current_toolbar_changed',self.goto_cb)
         self.set_toolbox(self.toolbox)
         self.toolbox.show()
         
