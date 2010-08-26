@@ -119,6 +119,11 @@ class DbAccess():
         cursor.execute('select * from groups where category = ?',('albums',))
         return cursor.fetchall()
     
+    def get_albums_containing(self,jobject_id):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from groups where jobject_id = ?',(jobject_id,))
+        return cursor.fetchall()
+
     def get_album_thumbnails(self,album_id,is_journal=False):
         if is_journal: #is_journal: #want most recent first, need left join because picture may not exist yet
             #sql = """select groups.*, data_cache.picture.* from  groups left join data_cache.picture  \
@@ -415,6 +420,25 @@ values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transfo
         except Exception,e:
             cursor.execute('rollback transaction')
             _logger.error('error deleting all references for object:%s. Error: ;%s'%(jobject_id,e,))
+
+    def set_config(self,name,value):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from config where name = ?',(name,))
+        rows = cursor.fetchall()
+        if len(rows)>0:
+            cursor.execute("update config set value = ? where id = ?",(album_id,rows[0]['id']))
+        else:
+            cursor.execute("insert into config (name,value) values (?,?)",(name,value,))
+        self.con.commit()
+        
+    def get_config(self,name):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from config where name = ?',(name,))
+        rows = cursor.fetchall()
+        if len(rows)>0:
+            return rows[0]['value']
+        else:
+            return ''
 
     def table_exists(self,table):
         try:

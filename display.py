@@ -37,6 +37,8 @@ import time
 from threading import Timer
 import datetime
 import gobject
+#from struct import unpack
+from array import array
 
 #application imports
 from dbphoto import *
@@ -421,8 +423,11 @@ class OneAlbum():
         pygame.display.flip()
         
     def repaint_whole_screen(self):
-        self._parent.paint_albums()
-        self.repaint()
+        if self.large_displayed:
+            pass 
+        else:
+            self._parent.paint_albums()
+            self.repaint()
        
     def release_cycles(self):
         while gtk.events_pending():
@@ -471,6 +476,8 @@ class OneAlbum():
         """album name is title stored in groups.jobject_id where category='albums'
         This should be called after display thumbnails  because the thumbnail routine
         counts the number of images  which this routine displays to the user
+        comment: this requirement led to Bug 2234 (incorrect count on drop image) -- so
+        count the thumbnails whenever album  (left side) is displayed
         """
         surf = pygame.Surface((album_column_width,album_height))
         
@@ -482,7 +489,10 @@ class OneAlbum():
         else:
             surf.fill(album_background_color)
         album_id = rows[index]['subcategory']
-        count = rows[index]['seq']
+        
+        #bug 2234 thumbnail count incorrect until click on left column        
+        count = self.db.get_thumbnail_count(rows[index]['subcategory'])
+        
         album = rows[index]['jobject_id']
 
         if album_id == trash_id:
@@ -1045,44 +1055,87 @@ class DisplayAlbums():
             
     def start_grab(self,x,y):
         global in_grab
-        self.start_grab_x = x
-        self.start_grab_y = y
+        _logger.debug('start_grab x:%s y:%s in_grab %s'%(x,y,in_grab,))
         #change the cursor some way
         if in_grab:
             in_grab = False
             self._activity.window.set_cursor(None)
+            self.drop_image(self.start_grab_x,self.start_grab_y,x,y)
         else:       
             in_grab = True
+            self.start_grab_x = x
+            self.start_grab_y = y
             fn = os.path.join(os.getcwd(),'assets','closed_hand.xbm')
-            #fn = os.path.join(os.getcwd(),'assets','handcursor.xbm')
-            fd = open(fn,'r')
-            bitstring = fd.read()
-            #_logger.debug('cursordata:%s'%bitstring)
+            bitstring = self.xbm_to_data(fn)
+            if len(bitstring) == 0: return  #error state
             bitpattern = gtk.gdk.bitmap_create_from_data(None,bitstring,48,48)
     
             fn = os.path.join(os.getcwd(),'assets','closed_hand_mask.xbm')
-            #fn = os.path.join(os.getcwd(),'assets','handcursor_mask.xbm')
-            maskfn = fn
-            fd = open(fn,'r')
-            maskstring = fd.read()
+            maskstring = self.xbm_to_data(fn)
+            if len(maskstring) == 0: return  #error state
             bitmask = gtk.gdk.bitmap_create_from_data(None,maskstring,48,48)
             
-            #a, b, c, d = pygame.cursors.load_xbm(patfn,maskfn)
-            #pygame.mouse.set_cursor(a,b,c,d)
+            self._activity.window.set_cursor(gtk.gdk.Cursor(bitmask,bitpattern,\
+                    gtk.gdk.Color(255,255,255),gtk.gdk.Color(255,255,255),24,24))
             
-            
-            self._activity.window.set_cursor(gtk.gdk.Cursor(bitpattern,bitmask,gtk.gdk.Color(255,255,255),gtk.gdk.Color(0,0,0),24,24))
-            #self._activity.window.set_cursor(gtk.gdk.Cursor(gtk.gdk.DOTBOX))
-            
+    def xbm_to_data(self,xbm_file):
+        if not os.path.isfile(xbm_file):return ''
+        fd = open(xbm_file,'r')
+        lines = fd.readlines()
+        byte_array = ()
+        w = None
+        h = None
+        index = 0
+        byte_array = array('B')
+        rtn_val = ''
+        for l in lines:
+            if len(l.strip()) == 0: continue
+            if l[0] == '#':
+                lh = l.find('height')
+                if lh > -1:
+                    h = int(l[lh+6:])
+                lw = l.find('width')
+                if lw > -1:
+                    w = int(l[lw+5:])
+            else:
+                if not (w and h): return ''
+                if index == 0:
+                    num_bytes = w * h / 8
+                #examine a case where there might be a hex number after bracket
+                brac =  l.find('{')
+                if brac > -1:
+                    if brac < len(l)-2: #shift it
+                        l = l[brac+1:]
+                    else:
+                        continue
+                brac = l.find('}')
+                if brac > -1: continue
+                hex_list = l.split(', ')
+                for i in range(len(hex_list)):
+                    chunk = hex_list[i].strip()
+                    if len(chunk) == 0: continue
+                    if chunk[-1:] == ',':
+                        chunk = chunk[:-1]
+                    try:
+                        pass
+                        byte_array.append(int(chunk,16))
+                        #hex_val = int(chunk,16)
+                    except Exception,e:
+                        _logger.debug('hex parse error: %s Input: %s line:%s'%(e,chunk,l,))
+                    rtn_val +=  chunk + ', '
+                    index += 1
+        return byte_array    
+    
     def drop_image(self, start_x,start_y,drop_x, drop_y):
         self._activity.window.set_cursor(None)
+        _logger.debug('drop_image start_x:%s start_y:%s drop_x:%s drop_y:%s'%(start_x,start_y,drop_x,drop_y,))
         
         if drop_x < album_column_width: #we are dropping on album side of screen
             jobject_id = self.album_objects[self.selected_album_id].get_jobject_id_at_xy(start_x,start_y)
             index = self.get_album_index_at_xy(drop_x, drop_y)
             if not index or not jobject_id: return
-
             current_album_id = self.get_current_album_identifier()
+            _logger.debug('drop_image index:%s jobject_id:%s current_album_id:%s'%(index,jobject_id,current_album_id,))
             
             #if item dragged from trash, put it back in journal_id as well as target stack
             if  current_album_id == trash_id:
@@ -1261,8 +1314,11 @@ class Application():
         album_id = self.album_collection.selected_album_id
         album_object = self.album_collection.album_objects.get(album_id,None)
         if not album_object: return
-        album_object.repaint_whole_screen()
-        _logger.debug('pygame_repaint completed')
+        if album_object.large_displayed:
+            self.vs.display_large()
+        else:
+            album_object.repaint_whole_screen()
+            _logger.debug('pygame_repaint completed')
         return False
 
     def do_startup(self):
@@ -1302,8 +1358,11 @@ class Application():
             self.util.remove_alert(alert)            
 
             #if the picture table is empty, populate it from the journal, and initialize
-            if ds_count < 10:
+            #fix for bug 2223 loads images repeatedly into journal
+            start_images_loaded = self.db.get_config('image_init')
+            if ds_count < 10 and start_images_loaded == '':
                 self.first_run_setup()
+                self.db.set_config('image_init','True')
                 
             self.album_collection = DisplayAlbums(self.db, self._activity)
             self.album_collection.paint_albums()
@@ -1500,6 +1559,7 @@ class Application():
         pygame.display.flip()
     
     def process_mouse_click(self,event):
+        global in_grab
         x,y = event.pos
         butt = event.button
         if butt == 4:
@@ -1509,18 +1569,23 @@ class Application():
             self.album_collection.album_objects[self.album_collection.selected_album_id].scroll_down()
         else:     
             l,m,r = pygame.mouse.get_pressed()
-            print('mouse single click')
-            if x < album_column_width -thick:
-                #scroll_x,scroll_y = self.album_collection.album_sb.get_scrolled()
-                rtn_val = self.album_collection.click(x,y)
-                if not rtn_val:
-                    #create a new album
-                    pass
-            elif x > album_column_width and x < (screen_w - thick):
-                if l:
-                    self.album_collection.album_objects[self.album_collection.selected_album_id].click(x,y)
-                elif r: 
-                    self.album_collection.start_grab(x,y)
+            _logger.debug('mouse single click')
+            if r: 
+                self.album_collection.start_grab(x,y)
+            else:
+                if x < album_column_width -thick:
+                    #scroll_x,scroll_y = self.album_collection.album_sb.get_scrolled()
+                    rtn_val = self.album_collection.click(x,y)
+                    if not rtn_val:
+                        #create a new album
+                        pass
+                elif x > album_column_width and x < (screen_w - thick):
+                    if l:
+                        if in_grab: #initiated by a right click
+                            self._activity.window.set_cursor(None)
+                            in_grab = False
+                        else:
+                            self.album_collection.album_objects[self.album_collection.selected_album_id].click(x,y)
         pygame.display.flip()
                 
     def process_mouse_double_click(self,event):

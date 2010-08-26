@@ -52,6 +52,7 @@ class ViewSlides():
         gobject.timeout_add(1000, self.__timeout)
         self.current_time = 1 #set so the first call of timeout will initiate action
         self.running = False
+        self.paint = None
         #display.screen.fill((0,0,0))
         #pygame.display.flip()
 
@@ -82,11 +83,9 @@ class ViewSlides():
         jobject_id = self.rows[self.index]['jobject_id']
         if not jobject_id: return
 
-        paint = self.transform_scale_slide(jobject_id)
-        if  paint:
-            display.screen.blit(paint,(0,0))
-            pygame.display.flip()
-        
+        self.paint = self.transform_scale_slide(jobject_id)
+        if  self.paint:
+            self.display_large()
         self.index += 1
         if self.index == len(self.rows):
             if self.loop:
@@ -95,6 +94,12 @@ class ViewSlides():
                 self.index -= 1
         self.album_object.thumb_index = self.index
        
+    def display_large(self):
+        self.album_object.large_displayed = True
+        display.screen.blit(self.paint,(0,0))
+        pygame.display.flip()
+        
+
     def transform_scale_slide(self,jobject_id):
         """return surface transformed per database transforms,onto screen sized target"""
         _logger.debug('entered transform_scale_slide')
@@ -176,6 +181,10 @@ class ViewSlides():
         return target_surf
        
     def run(self):
+        if len(self.rows) == 0:
+            self._parent.util.alert(_('Please select a stack that contains images'),_('Cannot show a slideshow with no images'))
+            self._parent._activity.use_toolbar.set_running(False)
+            return
         self.running = True
         self.paused = False
         _logger.debug('started the run loop')
@@ -222,6 +231,7 @@ class ViewSlides():
     def stop(self):
         self.running = False
         #'gtk.STOCK_MEDIA_STOP'
+        self.album_object.large_displayed = False
         self.album_object.repaint_whole_screen()
         
 

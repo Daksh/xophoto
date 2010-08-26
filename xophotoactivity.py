@@ -256,7 +256,22 @@ class XoPhotoActivity(activity.Activity):
         self.game.album_collection.delete_album(album_id)
 
     def activity_toolbar_empty_trash_cb(self):
-        self.util.confirmation_alert(_('Are you sure you want to proceed?'),\
+        rows = self.DbAccess_object.get_album_thumbnails(trash_id)
+        number_of_references = 0
+        for row in rows:
+            jobject_id = str(row['jobject_id'])
+            album_rows = self.DbAccess_object.get_albums_containing(jobject_id)
+            _logger.debug('album count:%s for jobject_id %s'%(len(album_rows),jobject_id,))
+            for album_row in album_rows:
+                if album_row['category'] == journal_id: continue
+                if album_row['category'] == trash_id: continue
+                number_of_references += 1
+        if number_of_references > 0:
+            number = str(number_of_references)
+            detail = _('These images are used in ') + number + _(' other stacks and will be deleted from them also.')
+        else:
+            detail = _('Are you sure you want to proceed?') 
+        self.util.confirmation_alert(detail,\
                               _('Warning! you are about to completely remove these images from your XO.'),\
                                 self.empty_trash_cb)
         
