@@ -39,6 +39,8 @@ from dbphoto import *
 import display
 #pick up activity globals
 from xophotoactivity import *
+import xophotoactivity
+
 
 
 import logging
@@ -91,13 +93,39 @@ class Datastore_SQLite():
         """scans the journal for pictures that are not in database, records jobject_id if found in
         table groups with the journal id in category. Can be faster because we don't have to fetch file itself.
         """
+        ds_list = []
+        num_found = 0
         mime_list = ['image/jpg','image/png','image/jpeg','image/gif',]
-        (results,count) = datastore.find({'mime_type':mime_list})
-        _logger.debug('Journal/datastore entries found:%s'%count)
+        
+        #build 650 doesn't seem to understand correctly the dictionary with a list right hand side
+        info = xophotoactivity.sugar_version()
+        if len(info)>0:
+            (major,minor,micro,release) = info
+            _logger.debug('sugar version major:%s minor:%s micro:%s release:%s'%info)
+        else:
+            _logger.debug('sugar version failure')
+            minor = 70
+        if minor > 80:
+            (results,count) = datastore.find({'mime_type': ['image/jpeg','image/jpg', 'image/png','image/gif']})
+        else:
+            (results,count) = datastore.find({'mime_type': 'image/jpeg'})
+            ds_list.extend(results)
+            num_found += count            
+            (results,count) = datastore.find({'mime_type': 'image/jpg'})
+            ds_list.extend(results)
+            num_found += count
+            (results,count) = datastore.find({'mime_type': 'image/png'})
+            ds_list.extend(results)
+            num_found += count
+            (results,count) = datastore.find({'mime_type': 'image/gif'})
+        ds_list.extend(results)
+        num_found += count
+        
+        _logger.debug('Journal/datastore entries found:%s'%num_found)
         added = 0
         a_row_found = False
         cursor = self.db.connection().cursor()
-        for ds in results:
+        for ds in ds_list:
             #at least for now assume that the newest images are returned first
             if not a_row_found:
                 dict = ds.get_metadata().get_dictionary()
@@ -111,11 +139,12 @@ class Datastore_SQLite():
                         self.db.add_image_to_album(display.journal_id,ds.object_id)
                         added += 1
                     else: #assume that pictures are returned in last in first out order
+                        #no longer true since we are getting each mime_type separately (build 650 kludge)
                         #a_row_found = True
                         pass
             ds.destroy()
         _logger.debug('scan found %s. Added %s datastore object ids from datastore to picture'%(count,added,))
-        return (count,added,)
+        return (num_found,added,)
     
     def make_one_thumbnail(self):
         if not self.db.is_open(): return
@@ -178,40 +207,50 @@ class FileTree():
         self._activity = activity
         self.dialog = None
 
-    def get_path(self):
+    def get_path(self,get_dir=False):
         _logger.debug('dialog to get user path for importing into journal')
-        if not self.dialog:
-            self.dialog = gtk.FileChooserDialog("Select Folder..",
+        path = '/home/olpc/Pictures'
+        try:
+            os.makedirs(path)
+        except:
+            pass
+        if get_dir:
+            action = gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER
+        else:
+            action = gtk.FILE_CHOOSER_ACTION_OPEN
+        dialog = gtk.FileChooserDialog("Select Folder..",
                                        None,
-                                       gtk.FILE_CHOOSER_ACTION_SELECT_FOLDER,
+                                       action,
                                        (gtk.STOCK_CANCEL, gtk.RESPONSE_CANCEL,
                                         gtk.STOCK_OPEN, gtk.RESPONSE_OK))
-        else:
-            self.dialog.show_all()
-        self.dialog.set_default_response(gtk.RESPONSE_OK)
-        #self.dialog.set_current_folder(os.path.dirname(self.last_filename))       
-        self.dialog.set_current_folder('/home/olpc/Pictures')               
+        dialog.set_default_response(gtk.RESPONSE_OK)
+        #dialog.set_current_folder(os.path.dirname(self.last_filename))       
+        dialog.set_current_folder('/home/olpc/Pictures')
+        dialog.set_select_multiple(True)
         filter = gtk.FileFilter()
         filter.set_name("All files")
         filter.add_pattern("*")
-        self.dialog.add_filter(filter)
+        dialog.add_filter(filter)
         
         filter = gtk.FileFilter()
         filter.set_name("Pictures")
         filter.add_pattern("*.png,*.jpg,*jpeg,*.gif")
-        self.dialog.add_filter(filter)
+        dialog.add_filter(filter)
                
-        response = self.dialog.run()
+        response = dialog.run()
         if response == gtk.RESPONSE_OK:
-            _logger.debug('%s selected'%self.dialog.get_filename() )
-            fname = self.dialog.get_filename()
+            _logger.debug('%s selected'%dialog.get_filename() )
+            if get_dir:
+                fname = [dialog.get_filename(),]
+            else:    
+                fname = dialog.get_filenames()
+            fname = fname
             self.last_filename = fname
         elif response == gtk.RESPONSE_CANCEL:
-            fname = None
+            fname = []
             _logger.debug( 'File chooseer closed, no files selected')
-        self.dialog.hide_all()
-        self.dialog.destroy()
-        self.dialog = None
+        dialog.hide()
+        dialog.destroy()
         return fname
     
     def _response_cb(self,alert,response):
@@ -221,45 +260,78 @@ class FileTree():
 
 
     def copy_tree_to_ds(self,path):
+        _logger.debug('copy tree received path:%s'%(path,))
+        dirlist = os.listdir(path)
+        abs_fn_list = []
+        for fn in dirlist:
+            abs_fn_list.append(os.path.join(path,fn))            
+        self.copy_list_to_ds(abs_fn_list)
+        
+    def copy_list_to_ds(self,file_list):
+        """receives list of absolute file names to be copied to datastore"""
         added = 0
+        reserve_at_least = 50000000L  #don't fill the last 50M of the journal
+        #reserve_at_least = 5000000000L  #force it to complain for testing
         self.cancel = False
         proc_start = time.clock()
-        dirlist = os.listdir(path)
-        num = len(dirlist)
+        if len(file_list) == 0: return
+        
+        #is the requested set of images going to fit in the XO datastore?
+        tot = 0.0
+        acceptable_extensions = ['jpg','jpeg','png','gif']
+        for filename in file_list:            
+            chunks = filename.split('.')
+            ext = ''
+            if len(chunks)>1:
+                ext = chunks[-1]
+            if ext in acceptable_extensions:
+                file_info = os.stat(filename)
+                tot += file_info.st_size                
+        info = os.statvfs(file_list[0])
+        free_space = info.f_bsize * info.f_bavail
+        #does it fit?
+        if tot > free_space - reserve_at_least:   #don't fill the last 50M of the journal
+            message1 = _('Selected images total ')
+            message2 = _(' Megabytes but available memory is only ')
+            message = message1 + '%.2f'%(tot / 1000000) + message2 + str((free_space - reserve_at_least) // 1000000)
+            title = _('Please select a smaller number of images for import.')
+            alert = self._activity.util.alert(msg=message,title=title)
+            self._activity.add_alert(alert)
+            _logger.debug('total free space message:%s free space:%d tot:%d'%(message,free_space,tot,))
+            return
+        num = len(file_list)
         message = _('Number of images to copy to the XO Journal: ') + str(num)
         pa_title = _('Please be patient')
         alert = display.ProgressAlert(msg=message,title=pa_title)
         self._activity.add_alert(alert)
         alert.connect('response',self._response_cb)
-        for filename in dirlist:            
+        for filename in file_list:            
             start = time.clock()
-            abspath = os.path.join(path, filename)
-            #print abs_path
             mtype = ''
-            chunks = abspath.split('.')
+            chunks = filename.split('.')
             if len(chunks)>1:
                 ext = chunks[-1]
                 if ext == 'jpg' or ext == 'jpeg':
-                    mtype = 'image/jpg'
+                    mtype = 'image/jpeg'
                 elif ext == 'gif':
                     mtype = 'image/gif'
                 elif ext == 'png':
                     mtype = 'image/png'
             if mtype == '': continue        
-            info = os.stat(abspath)
+            info = os.stat(filename)
             size = info.st_size
             
-            #if path and size are equal to image already loaded, abort
-            if self.db.check_in_ds(abspath,size): continue
+            #if the md5_sum is already in ds, abort
+            if self.db.is_picture_in_ds(filename): continue
             ds = datastore.create()
-            ds.metadata['filename'] = abspath
-            ds.metadata['title'] = filename
+            ds.metadata['filename'] = filename
+            ds.metadata['title'] = os.path.basename(filename)
             ds.metadata['mime_type'] = mtype
-            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',filename)
-            shutil.copyfile(abspath,dest)
+            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'instance',os.path.basename(filename))
+            shutil.copyfile(filename,dest)
             ds.set_file_path(dest)
             datastore.write(ds,transfer_ownership=True)
-            self.db.create_picture_record(ds.object_id,abspath)
+            self.db.create_picture_record(ds.object_id,filename)
             ds.destroy()
             _logger.debug('writing one image to datastore took %f seconds'%(time.clock()-start))
             added += 1
@@ -268,17 +340,9 @@ class FileTree():
                 gtk.main_iteration()
             if self.cancel:
                 break
-
         _logger.debug('writing all images to datastore took %f seconds'%(time.clock()-proc_start))
         self._activity.remove_alert(alert)
         return added
-    
-    def fill_ds(self):
-        path = self.get_path()
-        if path:
-            return self.copy_tree_to_ds(path)
-        
-                    
                 
 if __name__ == '__main__':
     db = DbAccess('/home/olpc/.sugar/default/org.laptop.XoPhoto/data/xophoto.sqlite')

@@ -237,7 +237,7 @@ class ViewSlides():
 
 class ExportAlbum():
     
-    def __init__(self,parent,rows,db,base_path,path):
+    def __init__(self,parent,rows,db,base_path,path,name):
         """inputs =rows is an array or records from table xophoto.sqlite.groups
                   =db is a class object which has functions for reading database
                   =path is writeable path indicating location for new exported images
@@ -249,9 +249,10 @@ class ExportAlbum():
         self.base_path = base_path
         self.path = path
         self.album = str(path.split('/')[-1])
+        self.name = name
         
     def do_export(self):
-        
+        disable_write = False        
         if not os.path.isdir(self.path):
             try:
                 os.makedirs(self.path)
@@ -268,13 +269,11 @@ class ExportAlbum():
             fd.close()
             os.unlink(fn)
         except Exception, e:
+            disable_write = True
             _logger.debug('attempting to write pictures exception %s'%e)
-            self._parent.game.util.alert(_('Write permission not set for path ')+
-            '%s'%self.base_path+
-            _(' Please see help for iinstructions to correct this problem.'),
-            _('Cannot Write Pictures'))
-            return
         index = 1          
+        lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
+        ok_exts = ['png','jpg','jpeg','jpe','gif','tif',]
         for row in self.rows:
             jobject_id = row['jobject_id']
             ds_object = datastore.get(jobject_id)
@@ -283,8 +282,8 @@ class ExportAlbum():
                 #if the picture was deleted from the datastore, we'll just ignore the error
                 continue
             fn = ds_object.get_file_path()
-            mime_type = self.db.get_mime_type(jobject_id)
-            lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
+            #mime_type = self.db.get_mime_type(jobject_id)
+            mime_type = ds_object.metadata.get('mime_type','')
             #base = os.path.basename(fn).split('.')
             base = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
             title = self._parent.DbAccess_object.get_title_in_picture(jobject_id)
@@ -295,14 +294,14 @@ class ExportAlbum():
                 base = base + lookup.get(mime_type,'')
                 base = base.replace(' ','_')
             else:
-                base = os.path.basename(fn)
-                base = base + lookup.get(mime_type,'')
+                base = self.name + lookup.get(mime_type,'')
             base = '%03d'%index +'_' + base
             _logger.debug('exporting %s to %s'%(fn,os.path.join(self.path,base),))
-            shutil.copy(fn,os.path.join(self.path,base))
+            if not disable_write:
+                shutil.copy(fn,os.path.join(self.path,base))
             ds_object.destroy()
             
-            #now update the metadata associated with this pictures
+            #now update the metadata associated with this picture
             ds_object = datastore.get(jobject_id)
             md = ds_object.get_metadata()
             if md:
@@ -314,12 +313,17 @@ class ExportAlbum():
                 if len(tag) == 0:
                     md['tags'] = self.album
                 else:
-                    md['tags'] = md['tags']  + ', ' +self.album
+                    if tag.find(self.album) < 0:
+                        md['tags'] = md['tags']  + ', ' +self.album
                 try:
                     datastore.write(ds_object)
                 except Exception, e:
                     _logger.debug('datastore write exception %s'%e)
             ds_object.destroy()
             index += 1
-
+        if disable_write:
+            self._parent.game.util.alert(_('Write permission not set for path ')+
+            '%s'%self.base_path+
+            _(' Please see help for instructions to correct this problem.'),
+            _('Cannot Write Pictures'))
                         

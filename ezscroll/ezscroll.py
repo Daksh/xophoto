@@ -121,8 +121,9 @@ class ScrollPane():
         """ Called by end user to get the scroll pane results """
         return self.pane
 
+#class ScrollBar(pygame.sprite.DirtySprite):
 
-class ScrollBar(pygame.sprite.DirtySprite):
+class ScrollBar(pygame.sprite.Sprite):
     """ Same interface as sprite.Group.
     Get result of update() in pixels scrolled, from get_scrolled()
     """

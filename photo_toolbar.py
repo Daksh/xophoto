@@ -111,20 +111,22 @@ class ActivityToolbar(gtk.Toolbar):
         self.insert(separator, -1)
         separator.show()
 
-        self.keep = ToolButton(tooltip=_('Save and Start New'))
+        self.keep = ToolButton()
+        self.keep.set_tooltip(_('Save and Start New'))
         #client = gconf.client_get_default()
         #color = XoColor(client.get_string('/desktop/sugar/user/color'))
         #keep_icon = Icon(icon_name='document-save', xo_color=color)
         keep_icon = Icon(icon_name='document-save')
         keep_icon.show()
         self.keep.set_icon_widget(keep_icon)
-        self.keep.props.accelerator = '<Ctrl>S'
+        #self.keep.props.accelerator = '<Ctrl>S'
         self.keep.connect('clicked', self.__keep_clicked_cb)
         self.insert(self.keep, -1)
         self.keep.show()
         
-        self.stop = ToolButton('activity-stop', tooltip=_('Stop'))
-        self.stop.props.accelerator = '<Ctrl>Q'
+        self.stop = ToolButton('activity-stop')
+        self.stop.set_tooltip(_('Stop'))
+        #self.stop.props.accelerator = '<Ctrl>Q'
         self.stop.connect('clicked', self.__stop_clicked_cb)
         self.insert(self.stop, -1)
         self.stop.show()
@@ -183,8 +185,8 @@ class ActivityToolbar(gtk.Toolbar):
 
     def __title_changed_cb(self, entry):
         if not self._update_title_sid:
-            self._update_title_sid = gobject.timeout_add_seconds(
-                                                1, self.__update_title_cb)
+            self._update_title_sid = gobject.timeout_add(
+                                                1000, self.__update_title_cb)
 
     def __update_title_cb(self, entry=None):
         title = self.title.get_text()

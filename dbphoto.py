@@ -86,6 +86,21 @@ class DbAccess():
             self.opendb(self.dbfilename)
         return self.con
     
+    def vacuum_data_cache(self):
+        if self.is_open():
+            self.closedb()
+        dbfilename = os.path.join(os.getcwd(),'data_cache.sqlite')
+        try:
+            conn = sqlite3.connect(dbfilename)
+            cursor = conn.cursor()
+            cursor.execute('vacuum')
+            conn.commit()
+            conn.close()
+            self.opendb(self.dbfilename)
+        except Exception,e:
+            _logger.debug('vacuum error %s'%e)
+
+
     def is_open(self):
         if self.con: return True
         return False
@@ -116,7 +131,7 @@ class DbAccess():
     
     def get_albums(self):
         cursor = self.connection().cursor()
-        cursor.execute('select * from groups where category = ?',('albums',))
+        cursor.execute("select * from groups where category = 'albums' order by seq asc")
         return cursor.fetchall()
     
     def get_albums_containing(self,jobject_id):
@@ -190,8 +205,9 @@ class DbAccess():
         cur.execute(sql)
         rows_md5 = cur.fetchall()
         if len(rows_md5) >0:
-            pass
-            _logger.debug('duplicate picture, ojbect_id %s path: %s'%(object_id,fn,))        
+            #pass
+            _logger.debug('duplicate picture, ojbect_id %s path: %s'%(object_id,fn,))
+            return 0
         sql = "select * from data_cache.picture where jobject_id = '%s'"%(object_id,)
         cur.execute(sql)
         rows = cur.fetchall()
@@ -200,9 +216,9 @@ class DbAccess():
         info = os.stat(fn)
         if len(rows) == 0:
             sql = """insert into data_cache.picture \
-                  (in_ds, mount_point, orig_size, create_date,jobject_id, md5_sum, duplicate) \
-                  values (%s,'%s',%s,'%s','%s','%s',%s)""" % \
-                  (1, fn, info.st_size, info.st_ctime, object_id, md5_hash,len(rows_md5),)
+                  (in_ds, mount_point, orig_size, create_date,jobject_id, md5_sum) \
+                  values (%s,'%s',%s,'%s','%s','%s')""" % \
+                  (1, fn, info.st_size, info.st_ctime, object_id, md5_hash,)
             cursor = self.connection().cursor()
             cursor.execute(sql)                
             self.con.commit()
@@ -217,6 +233,18 @@ class DbAccess():
             _logger.debug('%s seconds to update'%(time.clock()-start))
         return 0
     
+    def is_picture_in_ds(self,fn):
+        md5_hash = Md5Tools().md5sum(fn)
+        sql = "select * from data_cache.picture where md5_sum = '%s'"%(md5_hash,)
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute(sql)
+        rows_md5 = cur.fetchall()
+        if len(rows_md5) >0:
+            return True
+        return False
+
+
     def put_ds_into_picture(self,jobject_id):
         self.cur.execute("select * from data_cache.picture where jobject_id = ?",(jobject_id,))
         rows = self.cur.fetchall()
@@ -319,7 +347,7 @@ class DbAccess():
         rows = cursor.fetchmany()
         if len(rows) == 1:
             try:
-                cursor.execute('update groups set seq = ? where id = ?',(count,rows[0]['id']))
+                cursor.execute('update groups set stack_size = ? where id = ?',(count,rows[0]['id']))
                 self.con.commit()
             except Exception,e:
                 _logger.debug('set album count error:%s'%e)
@@ -336,19 +364,60 @@ class DbAccess():
             return 0
         
     def create_update_album(self,album_id,name):
-        cursor = self.connection().cursor()
+        conn = self.connection()
+        cursor = conn.cursor()
         cursor.execute('select * from groups where category = ? and subcategory = ?',\
                        ('albums',str(album_id,)))
         rows = cursor.fetchmany()
         _logger.debug('create-update found %s records. album:%s. Name:%s'%(len(rows),album_id,name,))
-        if len(rows)>0  : #pick up the name
+        if len(rows)>0  : #pick up the id
             id = rows[0]['id']
-            cursor.execute("update groups set  subcategory = ?, jobject_id = ? where id = ?",\
+            cursor.execute("update groups set  subcategory = ?, stack_name = ? where id = ?",\
                            (str(album_id),name,id))
         else:
-            cursor.execute("insert into groups (category,subcategory,jobject_id,seq) values (?,?,?,?)",\
-                           ('albums',str(album_id),name,0))
-        self.con.commit()
+            cursor.execute("insert into groups (category,subcategory,stack_name,seq) values (?,?,?,?)",\
+                           ('albums',str(album_id),name,30))
+        conn.commit()
+        if len(rows)>0:
+            return
+        
+        rows = self.get_albums()
+        if len(rows)>0:
+            #now go through and rewrite the sequence numbers
+            #need another cursor
+            update_cursor = conn.cursor()
+            num = 0
+            for row in rows:
+                update_cursor.execute("update groups set seq = ? where id = ?",(num,row['id'],))
+                num += 20
+            conn.commit()
+        else:
+            _logger.debug('failed to get albums  for resequence in create_update_album')
+
+    def reorder_albums(self,album_id,seq):
+        conn = self.connection()
+        cursor = conn.cursor()
+        cursor.execute('select * from groups where category = "albums" and subcategory = ?',\
+                       (str(album_id),))
+        rows = cursor.fetchmany()
+        _logger.debug('reorder_albums found %s records. album:%s.'%(len(rows),album_id,))
+        if len(rows)>0  : #pick up the id
+            id = rows[0]['id']
+            cursor.execute("update groups set  seq = ? where id = ?",(seq,id))
+        conn.commit()
+        rows = self.get_albums()
+        if len(rows)>0:
+            #now go through and rewrite the sequence numbers
+            #need another cursor
+            update_cursor = conn.cursor()
+            num = 0
+            for row in rows:
+                update_cursor.execute("update groups set seq = ? where id = ?",(num,row['id'],))
+                num += 20
+            conn.commit()
+        else:
+            _logger.debug('failed to get albums  for resequence in create_update_album')
+
 
     def add_image_to_album(self, album_id, jobject_id):
         cursor = self.connection().cursor()
@@ -376,7 +445,7 @@ class DbAccess():
                        (str(album_id), str(jobject_id),))
         conn.commit()
     
-    def write_transform(self,jobject_id,w,h,x_thumb,y_thumb,image_blob,rec_id = None,transform_type='thumb',rotate_left=1,seq=0):
+    def write_transform(self,jobject_id,w,h,x_thumb,y_thumb,image_blob,rec_id = None,transform_type='thumb',rotate_left=0,seq=0):
         _logger.debug('write_transform for rec_id %s'%rec_id)
         if image_blob:
             thumbstr = pygame.image.tostring(image_blob,'RGB')
@@ -390,8 +459,9 @@ class DbAccess():
                 cursor.execute("""update data_cache.transforms set thumb = ?, scaled_x = ?, scaled_y = ?, rotate_left = ?
                                where id = ?""",(thumb_binary,x_thumb,y_thumb,rotate_left,rec_id))
             else:
-                cursor.execute("""insert into data_cache.transforms (jobject_id,original_x,original_y,scaled_x,scaled_y,thumb,transform_type,seq)
-values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transform_type,seq))
+                cursor.execute("""insert into data_cache.transforms (jobject_id,original_x,original_y,
+                               scaled_x,scaled_y,thumb,transform_type,rotate_left,seq)
+values (?,?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transform_type,rotate_left,seq))
         except sqlite3.Error,e:
             _logger.debug('write thumbnail error %s'%e)
             return None
@@ -406,27 +476,33 @@ values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transfo
     def delete_all_references_to(self,jobject_id):
         conn = self.connection()
         cursor = conn.cursor()
-        try:
-            cursor.execute('begin transaction')
-            cursor.execute("delete from groups where jobject_id = ?",\
-                           (str(jobject_id),))
-            cursor.execute("delete from groups where subcategory = ?",\
-                           (str(jobject_id),))
-            cursor.execute("delete from data_cache.picture where jobject_id = ?",\
-                           (str(jobject_id),))
-            cursor.execute("delete from data_cache.transforms where jobject_id = ?",\
-                           (str(jobject_id),))
-            conn.commit()
-        except Exception,e:
-            cursor.execute('rollback transaction')
-            _logger.error('error deleting all references for object:%s. Error: ;%s'%(jobject_id,e,))
-
+        self.delete_if_exists('groups','jobject_id',jobject_id)
+        self.delete_if_exists('groups','subcategory',jobject_id)
+        self.delete_if_exists('data_cache.picture','jobject_id',jobject_id)
+        self.delete_if_exists('data_cache.transforms','jobject_id',jobject_id)
+    
+    def delete_if_exists(self,table,field,value):
+        conn = self.connection()
+        cursor = conn.cursor()
+        sql = 'select * from %s where %s = ?'%(table, field,)
+        cursor.execute(sql,(value,))
+        rows = cursor.fetchall()
+        if len(rows) > 0:
+            try:
+                sql = "delete from %s where %s = '%s'"%(table,field,str(value),)
+                cursor.execute(sql)
+                conn.commit()
+            except Exception,e:
+                _logger.error('error deleting all references for object:%s sql:%s. Error: ;%s'%(jobject_id,sql,e,))
+                
+    
+    
     def set_config(self,name,value):
         cursor = self.connection().cursor()
         cursor.execute('select * from config where name = ?',(name,))
         rows = cursor.fetchall()
         if len(rows)>0:
-            cursor.execute("update config set value = ? where id = ?",(album_id,rows[0]['id']))
+            cursor.execute("update config set value = ? where id = ?",(value,rows[0]['id']))
         else:
             cursor.execute("insert into config (name,value) values (?,?)",(name,value,))
         self.con.commit()
@@ -439,6 +515,39 @@ values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transfo
             return rows[0]['value']
         else:
             return ''
+
+    def set_lookup(self,name,value):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from data_cache.lookup where name = ?',(name,))
+        rows = cursor.fetchall()
+        if len(rows)>0:
+            cursor.execute("update data_cache.lookup set value = ? where id = ?",(value,rows[0]['id']))
+        else:
+            cursor.execute("insert into data_cache.lookup (name,value) values (?,?)",(name,value,))
+        self.con.commit()
+        
+    def get_lookup(self,name):
+        cursor = self.connection().cursor()
+        cursor.execute('select * from data_cache.lookup where name = ?',(name,))
+        rows = cursor.fetchall()
+        if len(rows)>0:
+            return rows[0]['value']
+        else:
+            return ''
+
+    def change_album_id(self,from_id,to_id):
+        conn = self.connection()
+        cur = conn.cursor()
+        cur.execute('select * from groups where category = ?',(from_id,))
+        rows = cur.fetchall()
+        if len(rows) == 0:
+            _logger.debug('change_album_id did not fetch category=%s'%from_id)
+            return
+        #need another cursor
+        update_cursor = conn.cursor()
+        for row in rows:
+            update_cursor.execute("update groups set category = ? where id = ?",(to_id,row['id'],))
+        conn.commit()  
 
     def table_exists(self,table):
         try:
@@ -508,25 +617,75 @@ values (?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,transfo
         except sqlite.Error, e:
             print sql+'\n'
             return False,e
-"""
-class osfsys():
 
-    def havewriteaccess(self,writefile):
+    def upgrade_db_copy_data(self,new_db,old_db):
         try:
-            fh=open(writefile,'w+')
-            fh.close()
-            return True
-        except:
+            conn = sqlite3.connect(new_db)
+            cursor = conn.cursor()
+            sql = "attach '%s' as data"%old_db
+            _logger.debug('attaching using sql %s'%sql)
+            cursor.execute(sql)
+            old_conn = sqlite3.connect(old_db)
+            old_cursor = old_conn.cursor()
+        except Exception,e:
+            if not os.path.isfile(new_db) or not os.path.isfile(old_db):
+                _logger.debug('upgrade_db path problems new:%s old:%s'%(new_db,old_db,))
+            _logger.debug('open database failed. exception :%s '%(e,))
             return False
+        cursor.execute("select tbl_name from sqlite_master where type = 'table'")
+        table_rows = cursor.fetchall()
+        
+        #get the tables in the old database
+        cursor.execute("select tbl_name from data.sqlite_master where type = 'table'")
+        data_rows = cursor.fetchall()
+        
+        for table in table_rows:
+            for data_row in data_rows:
+                if table[0] == data_row[0]:
+                    #the two databases have the same table, continue
+                    pragma_spec = 'pragma table_info(%s)'%table[0]
+                    cursor.execute(pragma_spec)
+                    new_fields = cursor.fetchall()
 
-    def havereadaccess(self,readfile):
+                    pragma_spec = 'pragma table_info(%s)'%table[0]
+                    old_cursor.execute(pragma_spec)
+                    old_fields = old_cursor.fetchall()
+                    
+                    #if both tables have a field, try to transfer the data                    
+                    field_list = []
+                    for new_field in new_fields:
+                        if new_field[1] == 'id' or new_field[1] == 'rowid': continue
+                        for old_field in old_fields:
+                            if new_field[1] == old_field[1]:
+                                field_list.append(old_field[1])
+                    fields = ', '.join(field_list)
+                    sql = 'insert into %s (%s) select %s from data.%s'%(table[0],fields,fields,table[0],)
+                    _logger.debug('upgrade sql:%s'%sql)
+                    try:
+                        cursor.execute(sql)    
+                    except Exception,e:
+                        _logger.debug('insert into %s database failed. exception :%s '%(table[0],e,))
+                        return False
+                    conn.commit()
+        conn.close()
+        return True
+        
+    def get_user_version(self,path):
         try:
-            fh=open(readfile,'r')
-            fh.close()
-            return True
-        except:
-            return False
-"""
+            conn = sqlite3.connect(path)
+            cursor = conn.cursor()
+        except Exception,e:
+            if not os.path.isfile(path):
+                _logger.debug('upgrade_db path problems new:%s old:%s'%(new_db,old_db,))
+            _logger.debug('get user version. exception :%s '%(e,))
+            return -1
+        cursor.execute('pragma user_version')
+        rows = cursor.fetchall()
+        conn.close()
+        if len(rows)>0:
+            return rows[0][0]
+        return 0
+    
 class Md5Tools():
     def md5sum_buffer(self, buffer, hash = None):
         if hash == None:
