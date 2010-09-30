@@ -34,6 +34,7 @@ import gtk
 import shutil
 import sqlite3
 import time
+from xml.etree.cElementTree import Element, ElementTree, SubElement
 
 from dbphoto import *
 import display
@@ -125,9 +126,11 @@ class Datastore_SQLite():
         added = 0
         a_row_found = False
         cursor = self.db.connection().cursor()
+        journal_list = []
         for ds in ds_list:
             #at least for now assume that the newest images are returned first
             if not a_row_found:
+                journal_list.append(ds.object_id)
                 dict = ds.get_metadata().get_dictionary()
                 if dict["mime_type"] in mime_list:
                     cursor.execute('select * from groups where category = ? and jobject_id = ?',\
@@ -135,7 +138,7 @@ class Datastore_SQLite():
                     rows = cursor.fetchall()
                     if len(rows) == 0:
                         #may need to add date entered into ds (create date could be confusing)
-                        #self.db.put_ds_into_picture(ds.object_id)
+                        self.db.put_ds_into_picture(ds.object_id)
                         self.db.add_image_to_album(display.journal_id,ds.object_id)
                         added += 1
                     else: #assume that pictures are returned in last in first out order
@@ -143,6 +146,8 @@ class Datastore_SQLite():
                         #a_row_found = True
                         pass
             ds.destroy()
+        #now go through albums and remove references that are no longer in datastore
+        #cursor.execute('select * from groups')
         _logger.debug('scan found %s. Added %s datastore object ids from datastore to picture'%(count,added,))
         return (num_found,added,)
     
@@ -270,6 +275,7 @@ class FileTree():
     def copy_list_to_ds(self,file_list):
         """receives list of absolute file names to be copied to datastore"""
         added = 0
+        jobject_id_list = {}
         reserve_at_least = 50000000L  #don't fill the last 50M of the journal
         #reserve_at_least = 5000000000L  #force it to complain for testing
         self.cancel = False
@@ -278,7 +284,7 @@ class FileTree():
         
         #is the requested set of images going to fit in the XO datastore?
         tot = 0.0
-        acceptable_extensions = ['jpg','jpeg','png','gif']
+        acceptable_extensions = ['jpg','jpeg','png','gif','jpe','tif']
         for filename in file_list:            
             chunks = filename.split('.')
             ext = ''
@@ -299,30 +305,56 @@ class FileTree():
             self._activity.add_alert(alert)
             _logger.debug('total free space message:%s free space:%d tot:%d'%(message,free_space,tot,))
             return
+        
+        #is there a xml information file in the directory where these photos are stored?
+        base = os.path.dirname(file_list[0])  #make assumption that list is all in a single directory
+        xml_path =  os.path.join(base,'xophoto.xml')
+        if os.path.isfile(xml_path):
+            xml_data = self.get_xml(xml_path)
+        else:
+            xml_data = None
+        
+        #let the user know progress of the import
         num = len(file_list)
         message = _('Number of images to copy to the XO Journal: ') + str(num)
         pa_title = _('Please be patient')
         alert = display.ProgressAlert(msg=message,title=pa_title)
         self._activity.add_alert(alert)
         alert.connect('response',self._response_cb)
+        
         for filename in file_list:            
             start = time.clock()
             mtype = ''
             chunks = filename.split('.')
             if len(chunks)>1:
                 ext = chunks[-1]
-                if ext == 'jpg' or ext == 'jpeg':
+                if ext == 'jpg' or ext == 'jpeg' :
                     mtype = 'image/jpeg'
                 elif ext == 'gif':
                     mtype = 'image/gif'
                 elif ext == 'png':
                     mtype = 'image/png'
             if mtype == '': continue        
-            info = os.stat(filename)
-            size = info.st_size
+            #info = os.stat(filename)
+            #size = info.st_size
             
+            #check if this image md5_sum is already loaded
+            if xml_data:
+                found = xml_data.findall(os.path.basename(filename))
+                if found:
+                    md5 = found[0].attrib.get('md5_sum',None)
+                    md5_row = self.db.is_md5_in_picture(md5)
+                    if md5  and md5_row:
+                        _logger.debug('md5 match from xml to picture table')
+                        jobject_id_list[filename] = md5_row['jobject_id']
+                        continue
+                    
             #if the md5_sum is already in ds, abort
-            if self.db.is_picture_in_ds(filename): continue
+            md5_row = self.db.is_picture_in_ds(filename)
+            if md5_row:
+                jobject_id_list[filename] = md5_row['jobject_id']
+                continue
+            
             ds = datastore.create()
             ds.metadata['filename'] = filename
             ds.metadata['title'] = os.path.basename(filename)
@@ -332,6 +364,7 @@ class FileTree():
             ds.set_file_path(dest)
             datastore.write(ds,transfer_ownership=True)
             self.db.create_picture_record(ds.object_id,filename)
+            jobject_id_list[filename] = ds.object_id
             ds.destroy()
             _logger.debug('writing one image to datastore took %f seconds'%(time.clock()-start))
             added += 1
@@ -340,10 +373,65 @@ class FileTree():
                 gtk.main_iteration()
             if self.cancel:
                 break
+        
+        #create an album for this import
+        self.create_album_for_import(file_list,xml_data,jobject_id_list)
+        
         _logger.debug('writing all images to datastore took %f seconds'%(time.clock()-proc_start))
         self._activity.remove_alert(alert)
         return added
-                
+    
+    def dict_dump(self,dct):
+        ret = ''
+        for key in dct.keys():
+            ret += '%s:%s | '%(key,dct[key])
+        return ret
+    
+    def create_album_for_import(self,file_list,xml_data,jobject_id_list):
+        _logger.debug('create album for import received jobject list %s'%self.dict_dump(jobject_id_list))
+        timestamp = None
+        name = None
+        if xml_data:
+            found = xml_data.findall('album_timestamp')
+            if found:
+                timestamp = found[0].text
+            if timestamp == display.journal_id or timestamp == display.trash_id:
+                timestamp = None
+        if not timestamp:
+            timestamp = str(datetime.datetime.today())
+        _logger.debug('timestamp:%s'%timestamp)
+        for file_name in file_list:
+            jobject_id = jobject_id_list.get(file_name)
+            self.db.add_image_to_album(timestamp,jobject_id)
+            if xml_data:
+                found = xml_data.findall(os.path.basename(file_name))
+                if found:
+                    _logger.debug('create album xml data %s'%self.dict_dump(found[0].attrib))
+                    title = found[0].attrib.get('title')
+                    if title:
+                        self.db.set_title_in_groups(jobject_id,title)
+                    comment = found[0].attrib.get('comment')
+                    if comment:
+                        self.db.set_comment_in_groups(jobject_id,comment)
+                    name = found[0].attrib.get('stack_name')
+        if not name:
+            name = _('Camera Roll')        
+        self.db.create_update_album(timestamp,name)
+        self._activity.game.album_collection.album_objects[timestamp] = \
+                display.OneAlbum(self.db,timestamp,self._activity.game.album_collection)
+        #set the image on the top of the stack to the last one in the seqence
+        self._activity.game.album_collection.album_objects[timestamp].set_top_image(jobject_id)
+        #save off the unique id(timestamp)as a continuing target
+        self.db.set_last_album(timestamp)
+        
+    def get_xml(self,xml_path):
+        try:
+            tree = ElementTree(file=xml_path).getroot()
+        except Exception,e:
+            _logger.debug('get_xml parse error: %s'%e)
+            return None
+        return tree
+
 if __name__ == '__main__':
     db = DbAccess('/home/olpc/.sugar/default/org.laptop.XoPhoto/data/xophoto.sqlite')
     if db.is_open():

@@ -76,9 +76,14 @@ album_height = 190
 album_size = (180,165)
 album_location = (25,25)
 album_aperature = (150,125)
+slideshow_title_font_size = 60
+slideshow_comment_font_size = 40
+slideshow_dwell = 3
 startup_clock = 0
 
 journal_id =  '20100521T10:42'
+menu_journal_label = _('Journal Title: ')
+menu_stack_label =  _('Stack Name:  ')
 trash_id = '20100521T11:40'
 
 
@@ -523,18 +528,13 @@ class OneAlbum():
         return surf
         
     def put_image_on_stack(self,album_id):
-        if album_id == journal_id:
-            sql = "select * from groups where category = '%s' order by seq asc"%(album_id)
-        elif album_id == trash_id:
-            return #let trash image alone
-        else:
-            sql = "select * from groups where category = '%s' order by seq desc"%(album_id)
-        (rows,cur) = self.db.dbdo(sql)
+        if album_id == trash_id:
+            return
+        rows = self.db.get_album_thumbnails(album_id,True)
         if len(rows)>0:
             jobject_id = str(rows[0]['jobject_id'])
         else:
             jobject_id = None
-            _logger.debug('failed to get jobject_id:%s for display on album side (stack).sql:%s'%(jobject_id,sql,))
             return None
         
         conn = self.db.get_connection()
@@ -893,17 +893,16 @@ class DisplayAlbums():
             _logger.debug('exception fetching thumbnails %s'%e)
             return
         self.selected_album_id = album_timestamp
+        self._activity.activity_toolbar.empty_journal_button.hide()           
         if album_timestamp == trash_id:
             self._activity.activity_toolbar.empty_journal_button.show()
+            self._activity.activity_toolbar.set_label(display.menu_journal_label,False)
+        elif album_timestamp == journal_id:
+            self._activity.activity_toolbar.set_label(display.menu_journal_label,True)
+            self._activity.activity_toolbar.title.set_text(self._activity.metadata.get('title'))
+            
         else:
-            self._activity.activity_toolbar.empty_journal_button.hide()           
-        #_logger.debug('now display album at index %s thumbnails with the album identifier %s'%
-                      #(self.album_index,album_timestamp))
-        change_name = True
-        for id,name in  self.predefined_albums:
-            if album_timestamp == id:
-                change_name = False
-        if change_name:
+            self._activity.activity_toolbar.set_label(display.menu_stack_label,True)
             self._activity.activity_toolbar.title.set_text(album_title)
         self.display_thumbnails(album_timestamp,new_surface=True)
         pygame.display.flip()
@@ -1145,13 +1144,19 @@ class DisplayAlbums():
             return
         from_album_id = self.get_album_id_at_index(from_index)
         to_album_id = self.get_album_id_at_index(to_index)
-        if to_album_id == journal_id: return  #silently do nothing
+        if to_album_id == journal_id: return #don't transfer anything to journal
         if to_album_id == trash_id: #this is a album delete-all request
-            caption = _('Caution -- This is a multiple image delete.')
-            message = _('Please confirm that you want to transfer all these images to the Trash')
-            alert = self._activity.util.confirmation_alert(message,caption,self.trash_them_cb)
-            alert.from_album_id = from_album_id
-            return
+            if from_album_id != journal_id:
+                caption = _('Caution -- This is a multiple image delete.')
+                message = _('Please confirm that you want to transfer all these images to the Trash')
+                alert = self._activity.util.confirmation_alert(message,caption,self.trash_them_cb)
+                alert.from_album_id = from_album_id
+                return
+            else:
+                caption = _('Not Allowed!! Just too easy to loose everything!')
+                message = _('If you really want to delete everything, create a stack, and drag it to Trash, then empty the Trash.')
+                alert = self._activity.util.alert(message,caption)
+                return  
         if from_album_id == journal_id or from_album_id == trash_id:
             #issue a no and exit
             caption = _('Not Permitted')
@@ -1171,6 +1176,7 @@ class DisplayAlbums():
     def trash_them_cb(self,alert,confirmation):
         if not confirmation == gtk.RESPONSE_OK: return
         #go ahead and move them to the trash, then display trash
+        if alert.from_album_id == trash_id or alert.from_album_id == journal_id: return
         self.db.change_album_id(alert.from_album_id,trash_id)
         self.delete_album(alert.from_album_id,trash_id)
     
@@ -1429,9 +1435,14 @@ class Application():
     def view_slides(self):
         album_object = self.set_album_for_viewslides()
         if album_object:
-            self.vs.run()
+            self.vs.running = True
+            self.vs.paused = False
+            self.vs.get_large_screen()
+            self._activity.fullscreen()
+            self.vs.show_title = True
+            self.vs.next_slide()
             #on return from viewing slides, restore the normal screen
-            album_object.repaint_whole_screen()
+            #album_object.repaint_whole_screen()
         
     def set_album_for_viewslides(self):
         album_id = self.album_collection.selected_album_id
@@ -1495,15 +1506,21 @@ class Application():
                 while gtk.events_pending():
                     gtk.main_iteration()
     
-                # Pump PyGame messages.
+                #if viewing slides, do different things
+                if self.vs.running or self.vs.paused:
+                    self.vs.run()
+                    continue
+                
+                # else fall through to do the main loop stuff.
                 for event in pygame.event.get():
                     if event.type in (MOUSEBUTTONDOWN,MOUSEBUTTONUP,MOUSEMOTION):
                         x,y = event.pos
                     if  event.type == KEYUP:
                         print event
                         if event.key == K_ESCAPE:
-                            running = False
-                            pygame.quit()                            
+                            #running = False
+                            #pygame.quit()
+                            pass
                         elif event.key == K_LEFT:
                             self.album_collection.album_objects[self.album_collection.selected_album_id].prev()
                             pygame.display.flip()  
@@ -1536,10 +1553,13 @@ class Application():
                     elif event.type == MOUSEMOTION:
                         self.drag(event)
                     elif event.type == MOUSEBUTTONUP:
+                        if not in_grab and self._activity and self._activity.window:
+                            self._activity.window.set_cursor(None)
                         if in_drag:
                             self.drop(event)
                     if event.type == pygame.QUIT:
-                        return
+                        pass
+                        #return
                     
                     elif event.type == pygame.VIDEORESIZE:
                         pygame.display.set_mode(event.size, pygame.RESIZABLE)
@@ -1628,6 +1648,7 @@ class Application():
             if r: 
                 self.album_collection.start_grab(x,y)
             else:
+                self.album_collection.set_hand_cursor()
                 if x < album_column_width -thick:
                     #scroll_x,scroll_y = self.album_collection.album_sb.get_scrolled()
                     rtn_val = self.album_collection.click(x,y)
@@ -1672,9 +1693,10 @@ class Application():
         global in_click_delay
         in_click_delay = False
     
-    def end_db_delay(self):    
-        global in_db_wait
-        in_db_wait = False
+    def is_journal(self):    
+        if self.album_collection.selected_album_id == journal_id:
+            return True
+        return False
         
 class shim():
     def __init__(self):

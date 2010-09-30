@@ -28,6 +28,8 @@ from sugar.graphics.toolcombobox import ToolComboBox
 from sugar.graphics.toolbutton import ToolButton
 from gettext import gettext as _
 
+import display
+
 class ActivityToolbar(gtk.Toolbar):
     """The Activity toolbar with the Journal entry title, sharing,
        Keep and Stop buttons
@@ -48,9 +50,9 @@ class ActivityToolbar(gtk.Toolbar):
         """
         #if activity.metadata:
         if True:
-            label = gtk.Label(_('New Album Name: '))
-            label.show()
-            self._add_widget(label)
+            self.label = gtk.Label(display.menu_journal_label)
+            self.label.show()
+            self._add_widget(self.label)
 
             self.title = gtk.Entry()
             self.title.set_size_request(int(gtk.gdk.screen_width() / 6), -1)
@@ -130,9 +132,15 @@ class ActivityToolbar(gtk.Toolbar):
         self.stop.connect('clicked', self.__stop_clicked_cb)
         self.insert(self.stop, -1)
         self.stop.show()
-
         self._update_title_sid = None
-
+        
+    def set_label(self,text,visible=True):
+        self.label.set_text(text)
+        if not visible:
+            self.title.set_sensitive(False)
+        else:
+            self.title.set_sensitive(True)
+            
     def _update_share(self):
         self._updating_share = True
 
@@ -190,10 +198,14 @@ class ActivityToolbar(gtk.Toolbar):
 
     def __update_title_cb(self, entry=None):
         title = self.title.get_text()
-
-        self._activity.metadata['title'] = title
-        self._activity.metadata['title_set_by_user'] = '1'
-        self._activity.game.change_album_name(title)
+        if self._activity.game.is_journal():
+            self._activity.metadata['title'] = title
+            self._activity.metadata['title_set_by_user'] = '1'
+        else:
+            self._activity.game.change_album_name(title)
+            title_set_by_user = self._activity.metadata.get('title_set_by_user')
+            if not title_set_by_user: #let the journal title reflect the most recent stack
+                self._activity.metadata['title'] = title                
         self._update_title_sid = None
         
         return False

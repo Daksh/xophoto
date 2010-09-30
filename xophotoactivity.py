@@ -166,7 +166,7 @@ class XoPhotoActivity(activity.Activity):
         #self.activity_toolbar.share.props.visible = False
         
         self.edit_toolbar = EditToolbar(self)
-        self.toolbox.add_toolbar(_('Edit'), self.edit_toolbar)
+        self.toolbox.add_toolbar(_('Input'), self.edit_toolbar)
         self.edit_toolbar.connect('do-import',
                 self.edit_toolbar_doimport_cb)
         self.edit_toolbar.connect('do-initialize',
@@ -392,7 +392,7 @@ class XoPhotoActivity(activity.Activity):
             exporter.do_export()
 
     def use_toolbar_do_fullscreen_cb(self,use_toolbar):
-        
+        self.game.vs.get_large_screen()
         self.fullscreen()
     
     def use_toolbar_doslideshow_cb(self,use_toolbar):
@@ -402,6 +402,7 @@ class XoPhotoActivity(activity.Activity):
     
     def use_toolbar_do_rewind_cb(self,use_toolbar):
         self.game.set_album_for_viewslides()
+        self.game.vs.pause()
         self.game.vs.prev_slide()
 
     def use_toolbar_do_pause_cb(self,use_toolbar):
@@ -414,6 +415,7 @@ class XoPhotoActivity(activity.Activity):
     
     def use_toolbar_do_forward_cb(self,use_toolbar):
         self.game.set_album_for_viewslides()
+        self.game.vs.pause()
         self.game.vs.next_slide()
     
     def use_toolbar_do_slideshow_stop_cb(self,use_toolbar):
@@ -635,7 +637,11 @@ class XoPhotoActivity(activity.Activity):
                 _logger.debug('database failed to re-open in write file. error:%s'%e)
                 exit()
             _logger.debug('sqlite datbase re-opened successfully')
-        
+    
+    def unfullscreen(self):
+        """this overrides the gtk.window function inherited by activity.Activity"""
+        super(activity.Activity,self).unfullscreen()
+        self.game.vs.is_fullscreen = False
 
 class EditToolbar(gtk.Toolbar):
     __gtype_name__ = 'EditToolbar'
@@ -815,6 +821,7 @@ class UseToolbar(gtk.Toolbar):
 
     def __init__(self):
         gtk.Toolbar.__init__(self)
+        self._update_dwell_sid = None
         self.doexport = photo_toolbar.ImageButton()
         fn = os.path.join(os.getcwd(),'assets','stack_export.png')
         tooltip = _('Export to USB/SD/DISK')
@@ -833,7 +840,7 @@ class UseToolbar(gtk.Toolbar):
         self.doupload.set_tooltip(_('Fullscreen'))
         self.doupload.connect('clicked', self.doupload_cb)
         self.insert(self.doupload, -1)
-        self.doupload.show()
+        self.doupload.hide()
                 
         separator = gtk.SeparatorToolItem()
         separator.props.draw = False
@@ -887,12 +894,14 @@ class UseToolbar(gtk.Toolbar):
 
         self.dwell_entry = gtk.Entry()        
         self.dwell_entry.set_width_chars(2)
+        self.dwell_entry.set_text(str(display.slideshow_dwell))
         tool_item = gtk.ToolItem()
         tool_item.set_expand(False)
         tool_item.add(self.dwell_entry)
         self.dwell_entry.show()
+        self.dwell_entry.connect('changed',self.__dwell_changed_cb)
         self.insert(tool_item, -1)
-        tool_item.hide()
+        tool_item.show()
 
         separator = gtk.SeparatorToolItem()
         separator.props.draw = True
@@ -943,7 +952,23 @@ class UseToolbar(gtk.Toolbar):
             self.do_rewind.set_sensitive(True)
             self.do_slideshow_stop.set_sensitive(True)
             
-        
+    def __dwell_changed_cb(self, entry):
+        if not self._update_dwell_sid:
+            self._update_dwell_sid = gobject.timeout_add(
+                                                1000, self.__update_dwell_cb)
+
+    def __update_dwell_cb(self, entry=None):
+        dwell = self.dwell_entry.get_text()
+        try: #only respond to integer values
+            new_dwell = int(dwell)
+        except:
+            self.dwell_entry.set_text(str(display.slideshow_dwell))
+            return False
+        _logger.debug('new dwell %s'%(new_dwell,))
+        self.dwell_entry.text = str(new_dwell)
+        display.slideshow_dwell = new_dwell
+        self._update_dwell_sid = None        
+        return False       
 
     def doexport_cb(self, button):
         self.emit('do-export')

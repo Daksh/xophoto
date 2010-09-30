@@ -19,6 +19,22 @@
 # with this program; if not, write to the Free Software Foundation, Inc.,
 # 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 #
+""" General introduction to XoPhoto database
+Two limitations have guided the layout of the databases:
+   1. Datastore is very slow reading or writing large data chunks
+   2.Minimal processing horsepower makes thumbnail generation slow and suggests that
+       thumbnails should be stored in the persistant data storage area assigned
+       to each activity.
+So there are really two sqlite databases associated with XoPhoto. xophoto.sqlite is
+stored in the journal, and holds the user state information -- Album stacks are stored
+in a table 'groups'. The table 'config' remembers last operations.
+
+The much larger database 'data_cache.sqlite' is stored in the persistent data area
+available to XoPhoto. I houses the thumbnail blobs and the necessary data about each
+image found in the datastore.
+
+
+"""
 from gettext import gettext as _
 
 import os
@@ -143,11 +159,13 @@ class DbAccess():
         if is_journal: #is_journal: #want most recent first, need left join because picture may not exist yet
             #sql = """select groups.*, data_cache.picture.* from  groups left join data_cache.picture  \
                   #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq desc"""
-            sql = """select groups.* from  groups where groups.category = ? order by groups.seq desc"""
+            sql = """select groups.*, picture.* from  groups, picture where groups.category = ?
+            and groups.jobject_id = picture.jobject_id order by groups.seq desc"""
         else:
             #sql = """select groups.*, data_cache.picture.* from groups left join data_cache.picture  \
                   #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq """
-            sql = "select * from groups where category = ? order by seq"
+            sql = """select groups.*, picture.* from groups, picture  where category = ?
+            and groups.jobject_id = picture.jobject_id order by seq"""
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
         return cursor.fetchall()
@@ -155,7 +173,7 @@ class DbAccess():
     def get_thumbnail_count(self,album_id):
         conn = self.connection()
         cursor = conn.cursor()
-        cursor.execute('select count(*) as count from groups where category = ?',(str(album_id),))
+        cursor.execute('select count(*) as count from groups,picture where category = ? and groups.jobject_id = picture.jobject_id',(str(album_id),))
         rows = cursor.fetchall()
         if len(rows) == 1:
             return rows[0]['count']
@@ -226,22 +244,27 @@ class DbAccess():
             return 1
         elif len(rows) == 1:
             sql = """update data_cache.picture set in_ds = ?, mount_point = ?, orig_size = ?, \
-                  create_date = ?, md5_sum = ?, duplicate = ?"""
+                  create_date = ?, md5_sum = ?"""
             cursor = self.connection().cursor()
-            cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,len(rows_md5)))             
+            cursor.execute(sql,(1, fn, info.st_size, info.st_ctime, md5_hash,))             
             self.con.commit()            
             _logger.debug('%s seconds to update'%(time.clock()-start))
         return 0
     
     def is_picture_in_ds(self,fn):
+        if not fn: return None
         md5_hash = Md5Tools().md5sum(fn)
+        return self.is_md5_in_picture(md5_hash)
+
+    def is_md5_in_picture(self,md5_hash):
+        if not md5_hash: return None
         sql = "select * from data_cache.picture where md5_sum = '%s'"%(md5_hash,)
         conn = self.connection()
         cur = conn.cursor()
         cur.execute(sql)
         rows_md5 = cur.fetchall()
         if len(rows_md5) >0:
-            return True
+            return rows_md5[0]
         return False
 
 
@@ -256,6 +279,7 @@ class DbAccess():
             self.con.commit()
     
     def set_title_in_picture(self,jobject_id,title):
+        """question: should title,comment default to last entered?"""
         if not jobject_id: return #during startup, jobject not yet set
         sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
         cur = self.connection().cursor()
@@ -267,6 +291,9 @@ class DbAccess():
             cursor.execute(sql,(title,jobject_id,))             
             self.con.commit()            
 
+    def set_title_in_groups(self,jobject_id,title):
+        self.set_title_in_picture(jobject_id,title)
+        
     def get_title_in_picture(self,jobject_id):
         if not jobject_id: return #during startup, jobject not yet set
         sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
@@ -289,6 +316,9 @@ class DbAccess():
             cursor.execute(sql,(comment,jobject_id,))             
             self.con.commit()            
 
+    def set_comment_in_groups(self,jobject_id,comment):
+        self.set_comment_in_picture(jobject_id,comment)
+        
     def get_comment_in_picture(self,jobject_id):
         if not jobject_id: return #during startup, jobject not yet set
         sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
@@ -300,6 +330,16 @@ class DbAccess():
         return None
 
     
+    def get_picture_rec_for_id(self,jobject_id):
+        if not jobject_id: return #during startup, jobject not yet set
+        sql = "select * from data_cache.picture where jobject_id = '%s'"%(jobject_id,)
+        cur = self.connection().cursor()
+        cur.execute(sql)
+        rows = cur.fetchall()
+        if len(rows) == 1:
+            return rows[0]
+        return None
+
     def clear_in_ds(self):
         self.connection().execute('update data_cache.picture set in_ds = 0')
     
@@ -362,6 +402,16 @@ class DbAccess():
             return 0
         except:
             return 0
+        
+    def get_album_name_from_timestamp(self,timestamp):
+        if not timestamp: return None
+        cursor = self.connection().cursor()
+        cursor.execute("select * from groups where category = 'albums' and subcategory = ?",(str(timestamp),))
+        rows = cursor.fetchall()
+        if len(rows) == 1:
+            return rows[0]['stack_name']
+        return None
+        
         
     def create_update_album(self,album_id,name):
         conn = self.connection()
@@ -536,6 +586,7 @@ values (?,?,?,?,?,?,?,?,?)""",(jobject_id,w,h,x_thumb,y_thumb,thumb_binary,trans
             return ''
 
     def change_album_id(self,from_id,to_id):
+        if from_id == to_id: return
         conn = self.connection()
         cur = conn.cursor()
         cur.execute('select * from groups where category = ?',(from_id,))

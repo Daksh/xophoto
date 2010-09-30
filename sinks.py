@@ -27,6 +27,7 @@ import sys, os
 import gtk
 import shutil
 import gobject
+from xml.etree.cElementTree import Element, ElementTree, SubElement
 
 #application imports
 from dbphoto import *
@@ -48,11 +49,14 @@ class ViewSlides():
         self.db = None
         self.paused = False
         self.loop = True
-        self.dwell_time = 3
         gobject.timeout_add(1000, self.__timeout)
         self.current_time = 1 #set so the first call of timeout will initiate action
         self.running = False
         self.paint = None
+        self.is_resized = False
+        self.show_title = False
+        self.show_default = True
+        self.is_fullscreen = False
         #display.screen.fill((0,0,0))
         #pygame.display.flip()
 
@@ -71,12 +75,12 @@ class ViewSlides():
             return True       
         self.current_time -= 1
         if self.current_time == 0:
-            self.current_time = self.dwell_time
+            self.current_time = display.slideshow_dwell
             self.display_next()
         return True
             
     def display_next(self):
-        self.current_time = self.dwell_time
+        self.current_time = display.slideshow_dwell
         if self.index < 0 or self.index >= len(self.rows):
             _logger.debug('display_next index out of bounds')
             return
@@ -96,10 +100,56 @@ class ViewSlides():
        
     def display_large(self):
         self.album_object.large_displayed = True
+        title = None
+        if self.is_fullscreen:
+            self.get_large_screen()
+            self.title_panel.fill((0,0,0))
+
+            title = self._parent.db.get_title_in_picture(self.rows[self.index]['jobject_id'])
+            if self.show_title and title or self.show_default:
+                font = pygame.font.Font(None,display.slideshow_title_font_size)
+                if title:
+                    show_title = title
+                else:                    
+                    default_title = _('Title for this Picture Will Appear Here')
+                    show_title = default_title
+                text = font.render('%s'%(show_title,),0,(255,255,255))
+                text_rect = text.get_rect()
+                text_rect.midtop =  self.title_panel.get_rect().midtop
+                self.title_panel.blit(text,text_rect)
+                
+                comment = self._parent.db.get_comment_in_picture(self.rows[self.index]['jobject_id'])
+                if comment or self.show_default:
+                    self.show_default = False
+                    font = pygame.font.Font(None,display.slideshow_comment_font_size)
+                    if comment:
+                        show_comment = comment
+                    else:                    
+                        default_comment = _('Use Up/Down to toggle text, space to Pause/Play, left/right for manual changes ')
+                        show_comment = default_comment
+                    text = font.render('%s'%(show_comment,),0,(255,255,255))
+                    text_rect = text.get_rect()
+                    text_rect.midbottom =  self.title_panel.get_rect().midbottom
+                    self.title_panel.blit(text,text_rect)
+    
+            display.screen.blit(self.title_panel,(0,display.screen_h))
+            _logger.debug('screen blit with title:%s'%(title,))
         display.screen.blit(self.paint,(0,0))
         pygame.display.flip()
         
+    def get_large_screen(self):
+        self.is_fullscreen = True
+        if not self.is_resized:
+            self.is_resized = True
+            y = gtk.gdk.screen_height()
+            size_y = y - display.screen_h
+            x = gtk.gdk.screen_width()
+            display.screen = pygame.display.set_mode((x,y),pygame.RESIZABLE)
+            _logger.debug('title panel request:(%s,%s)'%(x,size_y,))
+            self.title_panel = pygame.Surface((x,size_y))
+            self.title_panel.fill((0,0,0))
 
+        
     def transform_scale_slide(self,jobject_id):
         """return surface transformed per database transforms,onto screen sized target"""
         _logger.debug('entered transform_scale_slide')
@@ -155,7 +205,8 @@ class ViewSlides():
     def place_picture(self,source,target):
         """return surface centered and scaled,but not blitted to target"""
         target_rect = target.get_rect()
-        screen_w,screen_h = target_rect.size
+        #screen_w,screen_h = target_rect.size
+        screen_w,screen_h = display.screen_w,display.screen_h
         target_surf = pygame.Surface((screen_w,screen_h))
         image_rect = source.get_rect()
         screen_aspect = float(screen_w)/screen_h
@@ -185,13 +236,11 @@ class ViewSlides():
             self._parent.util.alert(_('Please select a stack that contains images'),_('Cannot show a slideshow with no images'))
             self._parent._activity.use_toolbar.set_running(False)
             return
-        self.running = True
-        self.paused = False
-        _logger.debug('started the run loop')
-        while self.running:
+        #while self.running:
+        if True:
             # Pump GTK messages.
-            while gtk.events_pending():
-                gtk.main_iteration()
+            #while gtk.events_pending():
+                #gtk.main_iteration()
 
             # Pump PyGame messages.
             for event in pygame.event.get():
@@ -202,11 +251,15 @@ class ViewSlides():
                     if event.key == K_ESCAPE:
                         self.running = False
                     elif event.key == K_LEFT:
-                        if self.index > 1:
-                            self.index -= 2
-                        self.display_next()
+                        self.prev_slide()
                     elif event.key == K_RIGHT:
                         self.display_next()
+                    elif event.key == K_UP:
+                        self.show_title = True
+                    elif event.key == K_DOWN:
+                        self.show_title = False
+                    elif event.key == K_SPACE:
+                        self.paused = not self.paused
 
     def pause(self):
         self.paused = True
@@ -221,7 +274,6 @@ class ViewSlides():
         
     def next_slide(self):
         self.index = self.album_object.thumb_index 
-
         self.display_next()
         
     def play(self):
@@ -230,6 +282,7 @@ class ViewSlides():
         
     def stop(self):
         self.running = False
+        self.paused = False
         #'gtk.STOCK_MEDIA_STOP'
         self.album_object.large_displayed = False
         self.album_object.repaint_whole_screen()
@@ -250,6 +303,7 @@ class ExportAlbum():
         self.path = path
         self.album = str(path.split('/')[-1])
         self.name = name
+        self.eroot = Element('root')        
         
     def do_export(self):
         disable_write = False        
@@ -275,6 +329,7 @@ class ExportAlbum():
         lookup = {'image/png':'.png','image/jpg':'.jpg','image/jpeg':'.jpg','image/gif':'.gif','image/tif':'.tif'}
         ok_exts = ['png','jpg','jpeg','jpe','gif','tif',]
         for row in self.rows:
+            timestamp = row['category']
             jobject_id = row['jobject_id']
             ds_object = datastore.get(jobject_id)
             if not ds_object:
@@ -295,8 +350,9 @@ class ExportAlbum():
                 base = base.replace(' ','_')
             else:
                 base = self.name + lookup.get(mime_type,'')
-            base = '%03d'%index +'_' + base
+            base = 'img_%03d'%index +'_' + base
             _logger.debug('exporting %s to %s'%(fn,os.path.join(self.path,base),))
+            cur_element = SubElement(self.eroot,base)
             if not disable_write:
                 shutil.copy(fn,os.path.join(self.path,base))
             ds_object.destroy()
@@ -307,21 +363,40 @@ class ExportAlbum():
             if md:
                 if title:
                     md['title'] = title
+                    cur_element.attrib['title'] = title
                 if description:
                     md['description'] = description
+                    cur_element.attrib['comment'] = description
                 tag = md.get('tags','')
                 if len(tag) == 0:
                     md['tags'] = self.album
                 else:
                     if tag.find(self.album) < 0:
                         md['tags'] = md['tags']  + ', ' +self.album
+                cur_element.attrib['export_dir'] = self.album
+                name = self.db.get_album_name_from_timestamp(row['category'])
+                if name:
+                    cur_element.attrib['stack_name'] = name
                 try:
                     datastore.write(ds_object)
                 except Exception, e:
                     _logger.debug('datastore write exception %s'%e)
             ds_object.destroy()
             index += 1
-        if disable_write:
+            
+            #add data from the pictue table
+            pict_row = self.db.get_picture_rec_for_id(jobject_id)
+            if pict_row:
+                cur_element.attrib['md5'] = pict_row['md5_sum']
+                cur_element.attrib['mount_point'] = pict_row['mount_point']
+                cur_element.attrib['orig_size'] = str(int(pict_row['orig_size']))
+                
+        if not disable_write:
+            cur_element = SubElement(self.eroot,'album_timestamp',)
+            cur_element.text = timestamp
+            fn = os.path.join(self.path,"xophoto.xml")
+            ElementTree(self.eroot).write(fn)
+        else:
             self._parent.game.util.alert(_('Write permission not set for path ')+
             '%s'%self.base_path+
             _(' Please see help for instructions to correct this problem.'),
