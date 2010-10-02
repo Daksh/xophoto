@@ -270,16 +270,16 @@ class FileTree():
         abs_fn_list = []
         for fn in dirlist:
             abs_fn_list.append(os.path.join(path,fn))            
-        self.copy_list_to_ds(abs_fn_list)
+        return_val = self.copy_list_to_ds(abs_fn_list)
+        return return_val
         
     def copy_list_to_ds(self,file_list):
         """receives list of absolute file names to be copied to datastore"""
-        added = 0
-        jobject_id_list = {}
+        self.file_list = file_list
         reserve_at_least = 50000000L  #don't fill the last 50M of the journal
         #reserve_at_least = 5000000000L  #force it to complain for testing
         self.cancel = False
-        proc_start = time.clock()
+        self.proc_start = time.clock()
         if len(file_list) == 0: return
         
         #is the requested set of images going to fit in the XO datastore?
@@ -301,28 +301,37 @@ class FileTree():
             message2 = _(' Megabytes but available memory is only ')
             message = message1 + '%.2f'%(tot / 1000000) + message2 + str((free_space - reserve_at_least) // 1000000)
             title = _('Please select a smaller number of images for import.')
-            alert = self._activity.util.alert(msg=message,title=title)
-            self._activity.add_alert(alert)
+            self._activity.util.confirmation_alert(message,title=title,confirmation_cb =self.do_import_cb)
             _logger.debug('total free space message:%s free space:%d tot:%d'%(message,free_space,tot,))
-            return
+            return False
+        imported = self.do_import()
+        return imported
+    
+    def do_import_cb(self, alert,response):
+        imported = self.do_import()
+        return imported
+    
+    def do_import(self):
+        #let the user know progress of the import
+        added = 0
+        jobject_id_list = {}
+        num = len(self.file_list)
         
         #is there a xml information file in the directory where these photos are stored?
-        base = os.path.dirname(file_list[0])  #make assumption that list is all in a single directory
+        base = os.path.dirname(self.file_list[0])  #make assumption that list is all in a single directory
         xml_path =  os.path.join(base,'xophoto.xml')
         if os.path.isfile(xml_path):
             xml_data = self.get_xml(xml_path)
+            num -= 1
         else:
-            xml_data = None
-        
-        #let the user know progress of the import
-        num = len(file_list)
+            xml_data = None        
         message = _('Number of images to copy to the XO Journal: ') + str(num)
         pa_title = _('Please be patient')
         alert = display.ProgressAlert(msg=message,title=pa_title)
         self._activity.add_alert(alert)
         alert.connect('response',self._response_cb)
         
-        for filename in file_list:            
+        for filename in self.file_list:            
             start = time.clock()
             mtype = ''
             chunks = filename.split('.')
@@ -375,11 +384,11 @@ class FileTree():
                 break
         
         #create an album for this import
-        self.create_album_for_import(file_list,xml_data,jobject_id_list)
+        self.create_album_for_import(self.file_list,xml_data,jobject_id_list)
         
-        _logger.debug('writing all images to datastore took %f seconds'%(time.clock()-proc_start))
+        _logger.debug('writing all images to datastore took %f seconds'%(time.clock()-self.proc_start))
         self._activity.remove_alert(alert)
-        return added
+        return added #non zero means True
     
     def dict_dump(self,dct):
         ret = ''

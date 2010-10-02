@@ -335,13 +335,15 @@ class XoPhotoActivity(activity.Activity):
     def edit_toolbar_doimport_cb(self, view_toolbar):
         if not self.file_tree:
             self.file_tree = FileTree(self.game.db,self)
-        path_list = self.file_tree.get_path()
-        if len(path_list) == 0: return
-        
-        if os.path.isdir(path_list[0]):
-            self.file_tree.copy_tree_to_ds(path_list[0])
-        else:
-            self.file_tree.copy_list_to_ds(path_list)
+        get_dir =  True
+        for get_dir in [True,False,]:
+            path_list = self.file_tree.get_path(get_dir)
+            if len(path_list) == 0: return
+            
+            if os.path.isdir(path_list[0]):
+                if self.file_tree.copy_tree_to_ds(path_list[0]): break
+            else:
+                if self.file_tree.copy_list_to_ds(path_list): break
         Datastore_SQLite(self.game.db).check_for_recent_images()
         self.game.album_collection.album_objects[journal_id].thumbnail_redo_world = True
         self.game.album_collection.display_journal()

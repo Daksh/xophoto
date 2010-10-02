@@ -47,6 +47,7 @@ class ViewSlides():
     def __init__(self,parent):
         self._parent = parent
         self.db = None
+        self.pygame_widget = None
         self.paused = False
         self.loop = True
         gobject.timeout_add(1000, self.__timeout)
@@ -146,6 +147,9 @@ class ViewSlides():
             x = gtk.gdk.screen_width()
             display.screen = pygame.display.set_mode((x,y),pygame.RESIZABLE)
             _logger.debug('title panel request:(%s,%s)'%(x,size_y,))
+            self.pygame_widget = self._parent._activity._pygamecanvas.get_pygame_widget()
+            if self.pygame_widget:
+                self.pygame_widget.window.set_cursor(None)
             self.title_panel = pygame.Surface((x,size_y))
             self.title_panel.fill((0,0,0))
 
