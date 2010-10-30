@@ -438,7 +438,7 @@ class OneAlbum():
             pass 
         else:
             self._parent.paint_albums()
-            self.repaint()
+            self.paint(True)
        
     def release_cycles(self):
         while gtk.events_pending():
@@ -726,9 +726,7 @@ class OneAlbum():
         
 class DisplayAlbums():
     """Shows the photo albums on left side of main screen, responds to clicks, drag/drop events"""
-    journal_id =  '20100521T10:42'
-    trash_id = '20100521T11:40'
-    predefined_albums = [(journal_id,_('All Pictures')),(trash_id,_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
+    predefined_albums = [(trash_id,_('Trash')),(journal_id,_('All Pictures')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
     def __init__(self,db,activity):
         self.db = db  #pointer to the open database
         self._activity = activity #pointer to the top level activity
@@ -756,18 +754,14 @@ class DisplayAlbums():
         self.album_surface = pygame.Surface((album_column_width,screen_h)).convert()
         self.album_surface.fill(background_color)
         
-        #if the albums table is empty, populate it from the journal, and initialize
-        sql = "select * from groups where category = 'albums'"
-        rows,cur = self.db.dbdo(sql)        
-        i = 0    
-        if len(rows) == 0: #it is not initialized
-            #first put the predefined names in the list of albums
-            for album_tup in self.predefined_albums:
-                sql = """insert into groups (category,subcategory,stack_name,seq) \
-                                  values ('%s','%s','%s',%s)"""%('albums',album_tup[0],album_tup[1],i,)
-                self.db.dbtry(sql)
-                i += 20
-            self.db.commit()
+        #check for the required predefined albums
+        rows = self.db.get_albums()
+        timestamp_list = []
+        for row in rows:
+            timestamp_list.append(row['subcategory'])
+        for album_tup in self.predefined_albums:
+            if album_tup[0] not in timestamp_list:
+                self.db.create_update_album(album_tup[0],album_tup[1],-1)
             
         #initialize the list of album objects from the database
         album_rows = self.db.get_albums()
@@ -792,7 +786,7 @@ class DisplayAlbums():
             _logger.debug('display_thumbnails did not find %s'%album_id)
      
     def display_journal(self):   
-        self.display_thumbnails(self.journal_id)
+        self.display_thumbnails(journal_id)
                 
     def clear_albums(self):
         global album_background_color
@@ -1134,6 +1128,7 @@ class DisplayAlbums():
             _logger.debug('calling update_resequendce with params %s,%s start_index:%s drop_index: %s drop_seq:%s new_seq:%s'%
                           (groups_rec_id,new_seq,start_index,drop_index,drop_seq,new_seq,))
             self.db.update_resequence(groups_rec_id,new_seq)
+            self.album_objects[self.selected_album_id].thumb_index = drop_index
             self.album_objects[self.selected_album_id].paint(True)
             
     def drag_album_onto_album(self,start_x,start_y,drop_x,drop_y):
@@ -1416,6 +1411,9 @@ class Application():
                 
             self.util.remove_alert(alert)            
 
+            self.album_collection = DisplayAlbums(self.db, self._activity)
+            self.album_collection.paint_albums()
+
             #if the picture table is empty, populate it from the journal, and initialize
             #fix for bug 2223 loads images repeatedly into journal
             start_images_loaded = self.db.get_lookup('image_init')
@@ -1424,8 +1422,6 @@ class Application():
                 self.db.set_lookup('image_init','True')
                 self.first_run_setup()
                 
-            self.album_collection = DisplayAlbums(self.db, self._activity)
-            self.album_collection.paint_albums()
             _logger.debug('took %s to do startup and paint albums'%(time.clock()-start))
             pygame.display.flip()
             start = time.clock()

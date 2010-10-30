@@ -165,7 +165,7 @@ class DbAccess():
             #sql = """select groups.*, data_cache.picture.* from groups left join data_cache.picture  \
                   #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq """
             sql = """select groups.*, picture.* from groups, picture  where category = ?
-            and groups.jobject_id = picture.jobject_id order by seq"""
+            and groups.jobject_id = picture.jobject_id order by groups.seq"""
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
         return cursor.fetchall()
@@ -413,7 +413,9 @@ class DbAccess():
         return None
         
         
-    def create_update_album(self,album_id,name):
+    def create_update_album(self,album_id,name,seq=None):
+        if not seq:
+            seq = 30
         conn = self.connection()
         cursor = conn.cursor()
         cursor.execute('select * from groups where category = ? and subcategory = ?',\
@@ -426,7 +428,7 @@ class DbAccess():
                            (str(album_id),name,id))
         else:
             cursor.execute("insert into groups (category,subcategory,stack_name,seq) values (?,?,?,?)",\
-                           ('albums',str(album_id),name,30))
+                           ('albums',str(album_id),name,seq))
         conn.commit()
         if len(rows)>0:
             return
