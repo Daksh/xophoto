@@ -169,8 +169,8 @@ class DbAccess:
         else:
             #sql = """select groups.*, data_cache.picture.* from groups left join data_cache.picture  \
                   #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq """
-            sql = """select groups.*, picture.* from groups, picture  where category = ?
-            and groups.jobject_id = picture.jobject_id order by seq"""
+            sql = """select groups.*, picture.* from groups, picture  where groups.category = ?
+            and groups.jobject_id = picture.jobject_id order by groups.seq"""
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
         return cursor.fetchall()
