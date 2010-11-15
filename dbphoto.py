@@ -60,7 +60,7 @@ console_formatter = logging.Formatter('%(name)s %(levelname)s %(funcName)s: %(li
 #_logger.addHandler(console_handler)
 
 
-class DbAccess():
+class DbAccess:
     con = None
     cursor = None
     def __init__(self,fn):
@@ -97,6 +97,7 @@ class DbAccess():
                 cursor.execute('select * from config')
                 not_open = False
             except:
+                _logger.exception('sql "select * from config" failed.')
                 not_open = True
         if not self.con or not_open:
             self.opendb(self.dbfilename)
@@ -127,6 +128,10 @@ class DbAccess():
     def closedb(self):
         if self.con:self.con.close()
         self.con = None
+        
+    def restart_db(self):
+        self.closedb()
+        self.opendb(self.dbfilename)
         
     def get_mime_list(self):
         mime_list =[]
@@ -165,7 +170,7 @@ class DbAccess():
             #sql = """select groups.*, data_cache.picture.* from groups left join data_cache.picture  \
                   #where groups.category = ? and groups.jobject_id = data_cache.picture.jobject_id order by groups.seq """
             sql = """select groups.*, picture.* from groups, picture  where category = ?
-            and groups.jobject_id = picture.jobject_id order by groups.seq"""
+            and groups.jobject_id = picture.jobject_id order by seq"""
         cursor = self.connection().cursor()
         cursor.execute(sql,(str(album_id),))
         return cursor.fetchall()
@@ -361,7 +366,14 @@ class DbAccess():
         second parameter retured is row number for update/insert
         """
         cursor = self.connection().cursor()
-        cursor.execute("select * from config where name = 'last_album'")
+        """
+        try:
+            cursor.execute("select * from config where name = ?",('last_album',))
+        except:
+            return None,0
+        """
+        cursor.execute("select * from config where name = ?",('last_album',))
+
         rows = cursor.fetchmany()
         _logger.debug('found %s last albums'%len(rows))
         if len(rows) == 1:
@@ -413,9 +425,7 @@ class DbAccess():
         return None
         
         
-    def create_update_album(self,album_id,name,seq=None):
-        if not seq:
-            seq = 30
+    def create_update_album(self,album_id,name):
         conn = self.connection()
         cursor = conn.cursor()
         cursor.execute('select * from groups where category = ? and subcategory = ?',\
@@ -428,7 +438,7 @@ class DbAccess():
                            (str(album_id),name,id))
         else:
             cursor.execute("insert into groups (category,subcategory,stack_name,seq) values (?,?,?,?)",\
-                           ('albums',str(album_id),name,seq))
+                           ('albums',str(album_id),name,30))
         conn.commit()
         if len(rows)>0:
             return

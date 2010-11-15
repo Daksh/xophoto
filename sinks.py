@@ -288,10 +288,6 @@ class ViewSlides():
         self.running = False
         self.paused = False
         #'gtk.STOCK_MEDIA_STOP'
-        if self.index == 0:
-            self.album_object.thumb_index = len(self.rows) - 1
-        else:
-            self.album_object.thumb_index = self.index - 1
         self.album_object.large_displayed = False
         self.album_object.repaint_whole_screen()
         

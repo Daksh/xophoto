@@ -82,19 +82,14 @@ class XoPhotoActivity(activity.Activity):
         self._activity = self
         self.interactive_close = False
         self.timed_out = False
-        self.window_realized = False
+        self.realized = False
         self.game = None
         self.kept_once = False
         self.util = Utilities(self)
         self.db_sanity_checked = False
         gobject.GObject.__init__(self)
         self.jobject_id = None
-        
-        #there appears to be an initial save yourself, asynchronous, which
-        #  in my write_file closes the database and causes sporatic failures
-        self.initial_save_yourself = False
-        
-       
+               
         if handle and handle.object_id and handle.object_id != '' and not self.use_db_template:
             _logger.debug('At activity startup, handle.object_id is %s'%handle.object_id)
             self.make_jobject = False
@@ -105,7 +100,9 @@ class XoPhotoActivity(activity.Activity):
 
         if self.make_jobject:
             self.read_file(None)
+            self.interactive_close = True
             self.save()
+            self.interactive_close = False
             _logger.debug('At activity startup, handle.object_id is None. Making a new datastore entry')
 
         #does activity init execute the read? check if dbobject is reliably open
@@ -120,6 +117,10 @@ class XoPhotoActivity(activity.Activity):
         self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
         self.toolbox.show()
         """
+        
+        #create a flag that indicates window realized
+        #self.connect_after('realize', self.realize_cb)
+        
         # Build the activity toolbar.
         self.build_toolbar()
 
@@ -147,6 +148,12 @@ class XoPhotoActivity(activity.Activity):
         _logger.debug('Running the Game. Startup Clock:%f'%(time.clock()-startup_clock,))
         self._pygamecanvas.run_pygame(self.game.run)
         
+    def pygame_repaint_cb(self,widget,event):
+        _logger.debug('pygame_repaint_cb. Realized:%s'%self.realized)
+        #if not self.realized:
+        #    return
+        gobject.idle_add(self.game.pygame_repaint)
+
     def build_toolbar(self):
         self.toolbox = photo_toolbar.ActivityToolbox(self)
         self.toolbox.connect_after('current_toolbar_changed',self._toolbar_changed_cb)
@@ -206,10 +213,6 @@ class XoPhotoActivity(activity.Activity):
         self.toolbox.show()
         self.set_toolbox(self.toolbox)
     
-    def pygame_repaint_cb(self,widget,event):
-        _logger.debug('pygame_repaint_cb')
-        gobject.idle_add(self.game.pygame_repaint)
-
     ################  Help routines
     def _toolbar_changed_cb(self,widget,tab_no):
         if tab_no == HELP_TAB:
@@ -231,8 +234,9 @@ class XoPhotoActivity(activity.Activity):
             _logger.debug('xid for pydebug:%s'%self.pdb_window.xid)
             self.help_x11 = self.help.realize_help()
         else:
-            self.help.activate_help()
-     
+            self.help.activate_help()    
+    ################  Help routines
+
     def activity_toolbar_add_album_cb(self,album_name):
         self.game.album_collection.create_new_album(None)
     
@@ -423,10 +427,17 @@ class XoPhotoActivity(activity.Activity):
     def use_toolbar_do_slideshow_stop_cb(self,use_toolbar):
         self.use_toolbar.set_running(False)
         self.game.vs.stop()
+        
+    def stop(self):
+        self.__stop_clicked_cb(None)
     
     def __stop_clicked_cb(self, button):
+        _logger.debug('entered the stop clicked call back')
         self.interactive_close = True
+        self.game.quit()
         self._activity.close()
+        #gtk.main_quit()
+        _logger.debug('completed the stop clicked call back')
     
     def non_conflicting(self,root,basename):
         """
@@ -575,13 +586,6 @@ class XoPhotoActivity(activity.Activity):
                             _logger.debug('unable to rename:%s response:%s'%(cmd,rsp,))
                         self.DbAccess_object.closedb()
                         dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-                        try:
-                            self.DbAccess_object = DbAccess(dest)
-                            if self.game:
-                                self.game.db = self.DbAccess_object
-                        except Exception,e:
-                            _logger.debug('database failed to re-open after rewrite on data_cache file. error:%s'%e)
-                            #exit()
             else:
                 #need to start over with a new template and regenerate the thumbnails
                 _logger.debug('swapping in template for transforms (thumbnail) database')
@@ -593,11 +597,22 @@ class XoPhotoActivity(activity.Activity):
                 except Exception,e:
                     _logger.debug('data_cache template failed to copy error:%s'%e)
                     exit()
-                
+        try:
+            self.DbAccess_object = DbAccess(dest)
+            if self.game:
+                self.game.db = self.DbAccess_object
+        except Exception,e:
+            _logger.exception('database failed to re-open after read routine. error:%s'%e)
+            exit()
+
+        #last_album = self.DbAccess_object.get_last_album()     
         _logger.debug('completed read_file. DbAccess_jobject is created. Since startup:%f'%(time.clock()-startup_clock,))        
         
     def write_file(self, file_path):
-        
+        """initially, I had write_file close/flush buffers. But the write_file appears to be in a different
+        thread, and it's asynchronous behavior causes db errors, if the database is closed in the middle of a
+        database operation. So we only close during an interactive close
+        """
         try:
             if self.DbAccess_object and  self.interactive_close:
                 if self.DbAccess_object.get_error(): return  #dont save a corrupted database
@@ -626,19 +641,12 @@ class XoPhotoActivity(activity.Activity):
             try: #putting in an empty template makes it easier to make a distributable activity
                 source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
                 shutil.copy(source,local_path)
+                _logger.debug('Normal XoPhoto Termination')
             except Exception,e:
                 _logger.debug('database template failed to copy error:%s'%e)
                 exit()
         else: #re-open the database
-            dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
-            try:
-                self.DbAccess_object = DbAccess(dest)
-                if self.game:
-                    self.game.db = self.DbAccess_object
-            except Exception,e:
-                _logger.debug('database failed to re-open in write file. error:%s'%e)
-                exit()
-            _logger.debug('sqlite datbase re-opened successfully')
+            _logger.debug('received a non-interactive write request. database left open')
     
     def unfullscreen(self):
         """this overrides the gtk.window function inherited by activity.Activity"""

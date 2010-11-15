@@ -438,7 +438,7 @@ class OneAlbum():
             pass 
         else:
             self._parent.paint_albums()
-            self.paint(True)
+            self.repaint()
        
     def release_cycles(self):
         while gtk.events_pending():
@@ -726,9 +726,13 @@ class OneAlbum():
         
 class DisplayAlbums():
     """Shows the photo albums on left side of main screen, responds to clicks, drag/drop events"""
-    predefined_albums = [(trash_id,_('Trash')),(journal_id,_('All Pictures')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
+    journal_id =  '20100521T10:42'
+    trash_id = '20100521T11:40'
+    predefined_albums = [(journal_id,_('All Pictures')),(trash_id,_('Trash')),] #_('Duplicates'),_('Last Year'),_('Last Month'),]
     def __init__(self,db,activity):
+        db.restart_db()
         self.db = db  #pointer to the open database
+        
         self._activity = activity #pointer to the top level activity
         self.album_sb = None
 
@@ -754,14 +758,21 @@ class DisplayAlbums():
         self.album_surface = pygame.Surface((album_column_width,screen_h)).convert()
         self.album_surface.fill(background_color)
         
-        #check for the required predefined albums
-        rows = self.db.get_albums()
-        timestamp_list = []
-        for row in rows:
-            timestamp_list.append(row['subcategory'])
-        for album_tup in self.predefined_albums:
-            if album_tup[0] not in timestamp_list:
-                self.db.create_update_album(album_tup[0],album_tup[1],-1)
+        #if the albums table is empty, populate it from the journal, and initialize
+        sql = "select * from groups where category = 'albums'"
+        try:
+            rows,cur = self.db.dbdo(sql)
+        except:
+            rows = []
+        i = 0    
+        if len(rows) == 0: #it is not initialized
+            #first put the predefined names in the list of albums
+            for album_tup in self.predefined_albums:
+                sql = """insert into groups (category,subcategory,stack_name,seq) \
+                                  values ('%s','%s','%s',%s)"""%('albums',album_tup[0],album_tup[1],i,)
+                self.db.dbtry(sql)
+                i += 20
+            self.db.commit()
             
         #initialize the list of album objects from the database
         album_rows = self.db.get_albums()
@@ -785,8 +796,8 @@ class DisplayAlbums():
         else:
             _logger.debug('display_thumbnails did not find %s'%album_id)
      
-    def display_journal(self):   
-        self.display_thumbnails(journal_id)
+    def display_journal(self, new_surface = False):   
+        self.display_thumbnails(self.journal_id, new_surface)
                 
     def clear_albums(self):
         global album_background_color
@@ -890,15 +901,15 @@ class DisplayAlbums():
         self._activity.activity_toolbar.empty_journal_button.hide()           
         if album_timestamp == trash_id:
             self._activity.activity_toolbar.empty_journal_button.show()
-            self._activity.activity_toolbar.set_label(display.menu_journal_label,False)
+            self._activity.activity_toolbar.set_label(display.menu_journal_label, False)
         elif album_timestamp == journal_id:
-            self._activity.activity_toolbar.set_label(display.menu_journal_label,True)
+            self._activity.activity_toolbar.set_label(display.menu_journal_label, True)
             self._activity.activity_toolbar.title.set_text(self._activity.metadata.get('title'))
             
         else:
-            self._activity.activity_toolbar.set_label(display.menu_stack_label,True)
+            self._activity.activity_toolbar.set_label(display.menu_stack_label, True)
             self._activity.activity_toolbar.title.set_text(album_title)
-        self.display_thumbnails(album_timestamp,new_surface=True)
+        self.display_thumbnails(album_timestamp, new_surface = True)
         pygame.display.flip()
         
     def add_to_current_album(self,jobject_id,current_album_id=None,name=None):
@@ -1128,7 +1139,6 @@ class DisplayAlbums():
             _logger.debug('calling update_resequendce with params %s,%s start_index:%s drop_index: %s drop_seq:%s new_seq:%s'%
                           (groups_rec_id,new_seq,start_index,drop_index,drop_seq,new_seq,))
             self.db.update_resequence(groups_rec_id,new_seq)
-            self.album_objects[self.selected_album_id].thumb_index = drop_index
             self.album_objects[self.selected_album_id].paint(True)
             
     def drag_album_onto_album(self,start_x,start_y,drop_x,drop_y):
@@ -1338,13 +1348,12 @@ class Application():
     db = None
     def __init__(self, activity):
         self._activity = activity
-        #self._activity.window.connect('activate-focus',self.expose_event_cb)
         self.file_tree = None
         self.util = Utilities(self._activity)
         self.album_collection = None
         self.vs = ViewSlides(self)
     
-    def first_run_setup(self):        
+    def first_run_setup(self, alert, response):        
         #scan the datastore and add new images as required
         source = os.path.join(os.environ['SUGAR_BUNDLE_PATH'],'startup_images')
         self.file_tree = FileTree(self.db,self._activity)
@@ -1354,13 +1363,13 @@ class Application():
         if number_of_pictures < 10:
             _logger.error('failed to initalize the datastore with at least 10 pictures')
             #exit(0)
+        else:
+            self.album_collection.display_journal(new_surface=True)
+            self.pygame_repaint()
         
     def change_album_name(self,name):
         if self.album_collection:
             self.album_collection.set_name(name)
-            
-    def expose_event_cb(self,widget):
-        self.pygame_repaint()
             
     def pygame_repaint(self):
         _logger.debug('pygame_repaint')
@@ -1374,6 +1383,20 @@ class Application():
             album_object.repaint_whole_screen()
             _logger.debug('pygame_repaint completed')
         return False
+    
+    def first_time_processing(self, images):
+        #fix for bug 2223 loads images repeatedly into journa--remember to only do once
+        start_images_loaded = self.db.get_lookup('image_init')
+        _logger.debug('config image_init:%s'%(start_images_loaded,))
+        if not start_images_loaded == '':
+            return
+        #only ask the question the first time program is run
+        self.db.set_lookup('image_init','True')
+        if images < 10:
+            #ask if the user would like to have some images loaded into journal
+            title = _('THERE ARE ') + str(images) + _(' IMAGES ON YOUR XO and this activity works with images')
+            alert = self.util.confirmation_alert(_('Click OK to have a few practice pictures loaded into your XO'),
+                                                 title, self.first_run_setup)                
 
     def do_startup(self):
             start = time.clock()
@@ -1392,7 +1415,7 @@ class Application():
                 #and 1 second when no records were added               
                 ds_count, added = self.ds_sql.check_for_recent_images()
             except PhotoException,e:
-                #This is a corrupted copy the sqlite database, start over
+                _logger.exception('This is a corrupted copy the sqlite database, start over')
                 self.db.close()
                 source = os.path.join(os.getcwd(),'xophoto.sqlite.template')
                 dest = os.path.join(os.environ['SUGAR_ACTIVITY_ROOT'],'data','xophoto.sqlite')
@@ -1413,20 +1436,16 @@ class Application():
 
             self.album_collection = DisplayAlbums(self.db, self._activity)
             self.album_collection.paint_albums()
-
-            #if the picture table is empty, populate it from the journal, and initialize
-            #fix for bug 2223 loads images repeatedly into journal
-            start_images_loaded = self.db.get_lookup('image_init')
-            _logger.debug('config image_init:%s'%(start_images_loaded,))
-            if ds_count < 10 and start_images_loaded == '':
-                self.db.set_lookup('image_init','True')
-                self.first_run_setup()
-                
             _logger.debug('took %s to do startup and paint albums'%(time.clock()-start))
-            pygame.display.flip()
+
             start = time.clock()
-            self.album_collection.display_journal()
+            #check for first time loading of a few images
+            self.first_time_processing(ds_count)
+            
+            self.album_collection.display_journal(new_surface = True)
             _logger.debug('took %s to display journal'%(time.clock()-start))
+            pygame.display.flip()
+            
 
     def view_slides(self):
         album_object = self.set_album_for_viewslides()
@@ -1437,8 +1456,6 @@ class Application():
             self._activity.fullscreen()
             self.vs.show_title = True
             self.vs.next_slide()
-            #on return from viewing slides, restore the normal screen
-            #album_object.repaint_whole_screen()
         
     def set_album_for_viewslides(self):
         album_id = self.album_collection.selected_album_id
@@ -1460,10 +1477,11 @@ class Application():
         global startup_clock
         startup_clock = xophotoactivity.startup_clock
         if True:
-            if not self._activity.DbAccess_object:  #we need to wait for the read-file to finish
+            if not self._activity.DbAccess_object:
+                #we need to wait for the read-file to finish
                 Timer(5.0, self.end_db_delay, ()).start()
                 in_db_wait = True
-                while not self._activity.DbAccess_object and in_db_wait:
+                while not (self._activity.DbAccess_object) and in_db_wait:
                     gtk.main_iteration()
                 if not self._activity.DbAccess_object:
                     _logger.error('db object not open after timeout in Appplication.run')
@@ -1490,13 +1508,10 @@ class Application():
             _logger.debug('about to do_startup. Startup Clock:%f'%(time.clock()-startup_clock))
             self.do_startup()
             
-            # Flip Display
-            pygame.display.flip()
-            
-            running = True
+            self.running = True
             x = 0 #initialize in case there is no mouse event
             _logger.debug('About to start running loop. Startup Clock:%f'%(time.clock()-startup_clock,))
-            while running:
+            while self.running:
                 #pygame.display.flip()
                 # Pump GTK messages.
                 while gtk.events_pending():
@@ -1506,15 +1521,18 @@ class Application():
                 if self.vs.running or self.vs.paused:
                     self.vs.run()
                     continue
-                
                 # else fall through to do the main loop stuff.
+
+                #during shutdown, the event.get will error
+                if not self.running:
+                    continue
                 for event in pygame.event.get():
                     if event.type in (MOUSEBUTTONDOWN,MOUSEBUTTONUP,MOUSEMOTION):
                         x,y = event.pos
                     if  event.type == KEYUP:
                         print event
                         if event.key == K_ESCAPE:
-                            #running = False
+                            #self.running = False
                             #pygame.quit()
                             pass
                         elif event.key == K_LEFT:
@@ -1533,7 +1551,7 @@ class Application():
                             _logger.debug('restart database recognized')
                             self._activity.read(none,initialize=True)
                             self._activity.close()
-                            running = False
+                            self.running = False
                             pygame.quit()                            
 
                     #mouse events
@@ -1693,6 +1711,10 @@ class Application():
         if self.album_collection.selected_album_id == journal_id:
             return True
         return False
+    
+    def quit(self):
+        self.running = False
+        pygame.quit()
         
 class shim():
     def __init__(self):

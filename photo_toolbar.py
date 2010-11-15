@@ -186,7 +186,7 @@ class ActivityToolbar(gtk.Toolbar):
         self._activity.copy()
 
     def __stop_clicked_cb(self, button):
-        self._activity.close()
+        self._activity.stop()
 
     def __jobject_updated_cb(self, jobject):
         self.title.set_text(jobject['title'])
