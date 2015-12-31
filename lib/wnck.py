@@ -10,5 +10,7 @@ else:
         wnck_path = "wnck_64"
     else:
         from wnck_32 import *
+    print "TESTING: ",
+    print ("lib/%s/wnck.so" % wnck_path)
     wnck = cdll.LoadLibrary("lib/%s/wnck.so" % wnck_path)
 sys.path.append("lib/%s" % wnck_path)
