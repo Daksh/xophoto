@@ -21,6 +21,8 @@ import shutil
 
 import gtk
 import gobject
+sys.path.append('lib/')
+
 import wnck
 #from time import time
 from sugar import util
