@@ -48,7 +48,6 @@ import shutil
 from threading import Timer
 from subprocess import Popen, PIPE
 
-from help.help import Help,Toolbar
 import display
 from display import *
 import photo_toolbar
@@ -123,11 +122,6 @@ class XoPhotoActivity(activity.Activity):
         
         # Build the activity toolbar.
         self.build_toolbar()
-
-        #following are essential for interface to Help
-        self.help_x11 = None
-        self.handle = handle
-        self.help = Help(self)
 
         #repaint the screen after a frame event
         self.toolbox.connect_after('expose-event',self.pygame_repaint_cb)
